@@ -61,5 +61,6 @@ Use the save panel in the app to:
 - save a browser restore point for the current room
 - restore the current browser's saved room state
 - export a Markdown session summary for the client
+- export a worksheet-specific SVG visual reference for the active focus
 - export a JSON session file that can be imported later
 - print or save the current worksheet view as a PDF

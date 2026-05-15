@@ -8,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   HeartHandshake,
+  ImageDown,
   Link,
   Lock,
   MessageSquareText,
@@ -331,8 +332,265 @@ const downloadText = (filename: string, text: string, type: string) => {
   const anchor = document.createElement('a')
   anchor.href = url
   anchor.download = filename
+  document.body.append(anchor)
   anchor.click()
-  URL.revokeObjectURL(url)
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const escapeXml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+
+const wrapSvgText = (value: string, maxChars = 34, maxLines = 5) => {
+  const words = value.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+  if (words.length === 0) return ['Not recorded yet.']
+  const lines: string[] = []
+  let line = ''
+
+  words.forEach((word) => {
+    const next = line ? `${line} ${word}` : word
+    if (next.length > maxChars && line) {
+      lines.push(line)
+      line = word
+    } else {
+      line = next
+    }
+  })
+  if (line) lines.push(line)
+
+  if (lines.length > maxLines) {
+    return [...lines.slice(0, maxLines - 1), `${lines[maxLines - 1].slice(0, maxChars - 3)}...`]
+  }
+  return lines
+}
+
+const svgText = (
+  value: string,
+  x: number,
+  y: number,
+  options: {
+    anchor?: 'start' | 'middle'
+    className?: string
+    lineHeight?: number
+    maxChars?: number
+    maxLines?: number
+  } = {},
+) => {
+  const lines = wrapSvgText(value, options.maxChars, options.maxLines)
+  const lineHeight = options.lineHeight ?? 22
+  const anchor = options.anchor ?? 'start'
+  const className = options.className ?? 'body'
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" class="${className}">${lines
+    .map(
+      (line, index) =>
+        `<tspan x="${x}" dy="${index === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`,
+    )
+    .join('')}</text>`
+}
+
+const getField = (worksheet: Worksheet, id: string) =>
+  worksheet.sections.find((field) => field.id === id)?.value.trim() ?? ''
+
+const visualFilename = (session: SessionState, worksheet: Worksheet) => {
+  const client = session.clientName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  const focus = worksheet.shortName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  const date = new Date(session.updatedAt).toISOString().slice(0, 10)
+  return `act-${focus}-visual-${client || 'client'}-${date}.svg`
+}
+
+const svgShell = (session: SessionState, worksheet: Worksheet, content: string) => `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="850" viewBox="0 0 1100 850" role="img" aria-labelledby="title desc">
+  <title id="title">${escapeXml(worksheet.name)} visual export</title>
+  <desc id="desc">ACT worksheet visual reference for ${escapeXml(session.clientName)}.</desc>
+  <style>
+    .page { fill: #fbfaf5; }
+    .ink { fill: #20302b; }
+    .muted { fill: #617068; }
+    .card { fill: #fffefa; stroke: #d7d0c1; stroke-width: 2; }
+    .soft { fill: #eef6ef; stroke: #b8d1c2; stroke-width: 2; }
+    .accent { fill: #2f6157; }
+    .accent-soft { fill: #dcebe4; stroke: #2f6157; stroke-width: 3; }
+    .warm { fill: #fff3d5; stroke: #cfb36a; stroke-width: 2; }
+    .line { stroke: #2f6157; stroke-width: 5; stroke-linecap: round; fill: none; }
+    .thin-line { stroke: #8a9b92; stroke-width: 2; stroke-linecap: round; fill: none; }
+    .title { font: 700 38px Inter, Arial, sans-serif; fill: #20302b; }
+    .subtitle { font: 500 18px Inter, Arial, sans-serif; fill: #617068; }
+    .label { font: 700 16px Inter, Arial, sans-serif; fill: #41504a; letter-spacing: 1px; text-transform: uppercase; }
+    .body { font: 500 19px Inter, Arial, sans-serif; fill: #20302b; }
+    .small { font: 500 15px Inter, Arial, sans-serif; fill: #617068; }
+    .node { font: 700 17px Inter, Arial, sans-serif; fill: #20302b; }
+    .white-node { font: 700 17px Inter, Arial, sans-serif; fill: #ffffff; }
+  </style>
+  <rect class="page" width="1100" height="850" rx="0" />
+  <text x="64" y="70" class="title">${escapeXml(worksheet.name)}</text>
+  <text x="64" y="104" class="subtitle">${escapeXml(session.clientName)} with ${escapeXml(
+    session.counselorName,
+  )} • ${escapeXml(new Date(session.updatedAt).toLocaleDateString())}</text>
+  ${content}
+</svg>`
+
+const card = (x: number, y: number, width: number, height: number, label: string, body: string) => `
+  <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="18" class="card" />
+  <text x="${x + 24}" y="${y + 38}" class="label">${escapeXml(label)}</text>
+  ${svgText(body, x + 24, y + 76, { maxChars: Math.floor(width / 12), maxLines: 6 })}
+`
+
+const hexaflex = (highlight: string, centerNote: string) => {
+  const nodes: Array<[string, number, number]> = [
+    ['Contact With The Present Moment', 550, 178],
+    ['Acceptance', 760, 298],
+    ['Values', 760, 542],
+    ['Committed Action', 550, 662],
+    ['Self-As-Context', 340, 542],
+    ['Cognitive Defusion', 340, 298],
+  ]
+  const points = nodes.map(([, x, y]) => `${x},${y}`).join(' ')
+  return `
+    <polygon points="${points}" class="thin-line" />
+    <circle cx="550" cy="420" r="105" class="soft" />
+    <text x="550" y="405" text-anchor="middle" class="node">Psychological</text>
+    <text x="550" y="430" text-anchor="middle" class="node">Flexibility</text>
+    ${svgText(centerNote, 550, 462, {
+      anchor: 'middle',
+      className: 'small',
+      maxChars: 24,
+      maxLines: 3,
+      lineHeight: 18,
+    })}
+    ${nodes
+      .map(([label, x, y]) => {
+        const active = label === highlight
+        return `
+          <circle cx="${x}" cy="${y}" r="88" class="${active ? 'accent-soft' : 'card'}" />
+          ${svgText(label, Number(x), Number(y) - 8, {
+            anchor: 'middle',
+            className: 'node',
+            maxChars: 16,
+            maxLines: 3,
+            lineHeight: 20,
+          })}
+        `
+      })
+      .join('')}
+  `
+}
+
+const buildVisualSvg = (session: SessionState, worksheet: Worksheet) => {
+  if (worksheet.id === 'values-compass') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        <circle cx="550" cy="430" r="196" class="soft" />
+        <path d="M550 214 L608 430 L550 646 L492 430 Z" class="accent" opacity="0.18" />
+        <path d="M334 430 L550 372 L766 430 L550 488 Z" class="accent" opacity="0.18" />
+        <circle cx="550" cy="430" r="66" class="accent" />
+        <text x="550" y="424" text-anchor="middle" class="white-node">Values</text>
+        <text x="550" y="450" text-anchor="middle" class="white-node">Compass</text>
+        ${card(64, 170, 286, 170, 'Life Map', getField(worksheet, 'domains'))}
+        ${card(750, 170, 286, 170, 'Chosen Values', getField(worksheet, 'values'))}
+        ${card(390, 640, 320, 150, 'Visible Behaviors', getField(worksheet, 'behaviors'))}
+        <path d="M382 318 C440 350 472 374 507 398" class="line" />
+        <path d="M718 318 C660 350 628 374 593 398" class="line" />
+        <path d="M550 504 L550 626" class="line" />
+      `,
+    )
+  }
+
+  if (worksheet.id === 'committed-action') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        <path d="M125 420 C280 260 438 260 550 420 C662 580 820 580 975 420" class="line" />
+        <circle cx="140" cy="420" r="38" class="accent" />
+        <circle cx="550" cy="420" r="52" class="warm" />
+        <circle cx="960" cy="420" r="38" class="accent" />
+        <text x="140" y="426" text-anchor="middle" class="white-node">Start</text>
+        <text x="550" y="414" text-anchor="middle" class="node">Barrier</text>
+        <text x="550" y="438" text-anchor="middle" class="node">Plan</text>
+        <text x="960" y="426" text-anchor="middle" class="white-node">Act</text>
+        ${card(84, 570, 286, 170, 'Values-Based Goal', getField(worksheet, 'goal'))}
+        ${card(407, 570, 286, 170, 'Likely Barriers', getField(worksheet, 'barriers'))}
+        ${card(730, 570, 286, 170, 'Support Plan', getField(worksheet, 'support'))}
+      `,
+    )
+  }
+
+  if (worksheet.id === 'defusion-lab') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        ${hexaflex('Cognitive Defusion', getField(worksheet, 'technique'))}
+        ${card(64, 640, 300, 145, 'Sticky Thought', getField(worksheet, 'thought'))}
+        ${card(736, 640, 300, 145, 'Next Action', getField(worksheet, 'next-action'))}
+      `,
+    )
+  }
+
+  if (worksheet.id === 'choice-point') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        <path d="M550 650 L550 430" class="line" />
+        <path d="M550 430 C450 365 344 315 220 260" class="line" />
+        <path d="M550 430 C650 365 756 315 880 260" class="line" />
+        <circle cx="550" cy="430" r="72" class="warm" />
+        <text x="550" y="424" text-anchor="middle" class="node">Choice</text>
+        <text x="550" y="448" text-anchor="middle" class="node">Point</text>
+        ${card(390, 650, 320, 130, 'Situation', getField(worksheet, 'situation'))}
+        ${card(64, 180, 330, 190, 'Hooks And Away Moves', getField(worksheet, 'hooks'))}
+        ${card(706, 180, 330, 190, 'Helpers And Toward Moves', getField(worksheet, 'toward'))}
+      `,
+    )
+  }
+
+  if (worksheet.id === 'act-matrix') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        <line x1="550" y1="170" x2="550" y2="760" class="line" />
+        <line x1="190" y1="465" x2="910" y2="465" class="line" />
+        <text x="550" y="156" text-anchor="middle" class="label">Inner Experience</text>
+        <text x="550" y="794" text-anchor="middle" class="label">Observable Behavior</text>
+        <text x="170" y="456" text-anchor="middle" class="label">Away</text>
+        <text x="930" y="456" text-anchor="middle" class="label">Toward</text>
+        ${card(260, 195, 580, 170, 'Thoughts, Feelings, Sensations', getField(worksheet, 'inner'))}
+        ${card(110, 530, 360, 190, 'Away Moves', getField(worksheet, 'away'))}
+        ${card(630, 530, 360, 190, 'Toward Moves', getField(worksheet, 'toward'))}
+      `,
+    )
+  }
+
+  if (worksheet.id === 'acceptance-expansion') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        ${hexaflex('Acceptance', getField(worksheet, 'space'))}
+        ${card(64, 640, 300, 145, 'Sensation Map', getField(worksheet, 'sensation'))}
+        ${card(736, 640, 300, 145, 'Carry It With You', getField(worksheet, 'withness'))}
+      `,
+    )
+  }
+
+  return svgShell(
+    session,
+    worksheet,
+    `
+      ${hexaflex('Self-As-Context', getField(worksheet, 'noticer'))}
+      ${card(64, 640, 300, 145, 'What Is Noticed', getField(worksheet, 'noticed'))}
+      ${card(736, 640, 300, 145, 'Return Cue', getField(worksheet, 'return'))}
+    `,
+  )
 }
 
 const formatSessionMarkdown = (session: SessionState) => {
@@ -530,6 +788,15 @@ function App() {
     setNotice('Downloaded a client-friendly session summary.')
   }
 
+  const exportFocusVisual = () => {
+    downloadText(
+      visualFilename(session, activeWorksheet),
+      buildVisualSvg(session, activeWorksheet),
+      'image/svg+xml',
+    )
+    setNotice(`Downloaded a visual ${activeWorksheet.shortName.toLowerCase()} reference.`)
+  }
+
   const importSession = async (file: File | undefined) => {
     if (!file) return
     try {
@@ -660,6 +927,10 @@ function App() {
             <button type="button" onClick={exportMarkdown}>
               <FileText aria-hidden="true" />
               Summary
+            </button>
+            <button type="button" onClick={exportFocusVisual}>
+              <ImageDown aria-hidden="true" />
+              Visual
             </button>
             <button type="button" onClick={exportJson}>
               <FileJson aria-hidden="true" />
