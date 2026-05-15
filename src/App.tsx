@@ -11,6 +11,7 @@ import {
   ImageDown,
   Link,
   Lock,
+  Map,
   MessageSquareText,
   MonitorUp,
   PenLine,
@@ -39,7 +40,7 @@ type Worksheet = {
   name: string
   shortName: string
   focus: string
-  icon: 'values' | 'defusion' | 'choice' | 'matrix' | 'mindful'
+  icon: 'values' | 'lifemap' | 'defusion' | 'choice' | 'matrix' | 'mindful'
   sections: Field[]
 }
 
@@ -96,6 +97,43 @@ const templates: Worksheet[] = [
         prompt: 'What would another person see if these values were being lived?',
         value: '',
         placeholder: 'Call my sister weekly; take lunch away from the desk...',
+      },
+    ],
+  },
+  {
+    id: 'life-map',
+    name: 'Life Map',
+    shortName: 'Life Map',
+    focus: 'Notice what shows up inside, what pulls away, and what moves toward who and what matters.',
+    icon: 'lifemap',
+    sections: [
+      {
+        id: 'important',
+        label: 'Who and what matters',
+        prompt: 'Who and what is most important to you?',
+        value: '',
+        placeholder: 'My partner, children, health, creativity, faith, learning...',
+      },
+      {
+        id: 'inner-barriers',
+        label: 'Inner barriers',
+        prompt: 'What thoughts, feelings, or sensations get in the way of moving forward?',
+        value: '',
+        placeholder: 'Fear of rejection, shame, tight chest, “I will mess this up”...',
+      },
+      {
+        id: 'away-moves',
+        label: 'Away moves',
+        prompt: 'What do you do to move away from those difficult inner experiences?',
+        value: '',
+        placeholder: 'Avoid calls, argue, numb out, cancel, overthink, stay busy...',
+      },
+      {
+        id: 'toward-moves',
+        label: 'Toward moves',
+        prompt: 'What could you do to move toward who or what is important to you?',
+        value: '',
+        placeholder: 'Make the call, ask for help, take one step, show up honestly...',
       },
     ],
   },
@@ -294,10 +332,34 @@ const createInitialState = (): SessionState => ({
 
 const iconMap = {
   values: Sparkles,
+  lifemap: Map,
   defusion: MessageSquareText,
   choice: CircleDot,
   matrix: Activity,
   mindful: HeartHandshake,
+}
+
+const normalizeSession = (state: SessionState): SessionState => {
+  const worksheets = templates.map((template) => {
+    const existing = state.worksheets.find((worksheet) => worksheet.id === template.id)
+    if (!existing) return template
+    return {
+      ...template,
+      ...existing,
+      sections: template.sections.map((templateField) => {
+        const existingField = existing.sections.find((field) => field.id === templateField.id)
+        return existingField ? { ...templateField, value: existingField.value } : templateField
+      }),
+    }
+  })
+
+  return {
+    ...state,
+    worksheets,
+    activeWorksheetId: worksheets.some((worksheet) => worksheet.id === state.activeWorksheetId)
+      ? state.activeWorksheetId
+      : templates[0].id,
+  }
 }
 
 const getRoomFromUrl = () => {
@@ -491,12 +553,41 @@ const buildVisualSvg = (session: SessionState, worksheet: Worksheet) => {
         <circle cx="550" cy="430" r="66" class="accent" />
         <text x="550" y="424" text-anchor="middle" class="white-node">Values</text>
         <text x="550" y="450" text-anchor="middle" class="white-node">Compass</text>
-        ${card(64, 170, 286, 170, 'Life Map', getField(worksheet, 'domains'))}
+        ${card(64, 170, 286, 170, 'Life Domains', getField(worksheet, 'domains'))}
         ${card(750, 170, 286, 170, 'Chosen Values', getField(worksheet, 'values'))}
         ${card(390, 640, 320, 150, 'Visible Behaviors', getField(worksheet, 'behaviors'))}
         <path d="M382 318 C440 350 472 374 507 398" class="line" />
         <path d="M718 318 C660 350 628 374 593 398" class="line" />
         <path d="M550 504 L550 626" class="line" />
+      `,
+    )
+  }
+
+  if (worksheet.id === 'life-map') {
+    return svgShell(
+      session,
+      worksheet,
+      `
+        <rect x="82" y="145" width="936" height="630" rx="0" fill="none" stroke="#44504b" stroke-width="2" />
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#20302b" />
+          </marker>
+        </defs>
+        <line x1="550" y1="190" x2="550" y2="730" stroke="#20302b" stroke-width="7" marker-start="url(#arrow)" marker-end="url(#arrow)" />
+        <line x1="150" y1="460" x2="950" y2="460" stroke="#20302b" stroke-width="7" marker-start="url(#arrow)" marker-end="url(#arrow)" />
+        <circle cx="550" cy="460" r="70" fill="#fbfaf5" stroke="#20302b" stroke-width="4" />
+        <line x1="490" y1="460" x2="610" y2="460" stroke="#20302b" stroke-width="4" />
+        <text x="550" y="438" text-anchor="middle" class="node">Me</text>
+        <text x="550" y="488" text-anchor="middle" class="node">Noticing</text>
+        <text x="116" y="190" class="label">3. Away Moves</text>
+        ${svgText(getField(worksheet, 'away-moves'), 116, 224, { maxChars: 31, maxLines: 7 })}
+        <text x="616" y="190" class="label">4. Toward Moves</text>
+        ${svgText(getField(worksheet, 'toward-moves'), 616, 224, { maxChars: 31, maxLines: 7 })}
+        <text x="116" y="575" class="label">2. Inner Barriers</text>
+        ${svgText(getField(worksheet, 'inner-barriers'), 116, 609, { maxChars: 31, maxLines: 7 })}
+        <text x="616" y="575" class="label">1. Who And What Matters</text>
+        ${svgText(getField(worksheet, 'important'), 616, 609, { maxChars: 31, maxLines: 7 })}
       `,
     )
   }
@@ -673,7 +764,7 @@ function App() {
       socket.addEventListener('message', (event) => {
         const message = JSON.parse(event.data) as WireMessage
         if (message.type === 'state') {
-          setSession(message.state)
+          setSession(normalizeSession(message.state))
           setParticipants(message.participantCount)
         }
         if (message.type === 'presence') setParticipants(message.participantCount)
@@ -742,7 +833,7 @@ function App() {
         setNotice('The saved restore point could not be read.')
         return
       }
-      updateSession(() => restored)
+      updateSession(() => normalizeSession(restored))
       setNotice('Restored the browser save point and synced it to the room.')
     } catch {
       setNotice('The saved restore point could not be read.')
@@ -788,7 +879,7 @@ function App() {
         setNotice('That file does not look like an ACT session export.')
         return
       }
-      updateSession(() => ({ ...imported, updatedAt: Date.now() }))
+      updateSession(() => normalizeSession({ ...imported, updatedAt: Date.now() }))
       setNotice('Imported the session file and synced it to the room.')
     } catch {
       setNotice('The selected file could not be imported.')

@@ -7,6 +7,7 @@ with live room-based editing over WebSockets.
 ## Included Activities
 
 - Values Compass
+- Life Map
 - Committed Action Plan
 - Defusion Lab
 - Choice Point
@@ -71,7 +72,8 @@ The `Visual` button exports an SVG handout for the currently selected focus.
 
 | Focus | Visual worksheet export |
 | --- | --- |
-| Values | Life Map / Values Compass |
+| Values | Life Domains / Values Compass |
+| Life Map | Life Map with Me/Noticing axes |
 | Action | Committed Action Path |
 | Defusion | Hexaflex with Cognitive Defusion highlighted |
 | Choice Point | Choice Point fork map |
