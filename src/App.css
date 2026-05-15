@@ -245,6 +245,20 @@ button.selected,
   padding: 0;
 }
 
+.follow-toggle {
+  justify-content: flex-start;
+  border-color: #d6d0c4;
+  background: #f8f5eb;
+  min-height: 42px;
+  padding-inline: 11px;
+}
+
+.follow-toggle.selected {
+  color: #143c34;
+  border-color: #a9c9b8;
+  background: #eef7ef;
+}
+
 .workspace {
   min-width: 0;
   padding: 26px;

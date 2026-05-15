@@ -96,6 +96,17 @@ wss.on('connection', (socket) => {
           })
         }
       })
+      return
+    }
+
+    if (message.type === 'follow' && currentRoomId) {
+      const room = rooms.get(currentRoomId)
+      if (!room) return
+      room.clients.forEach((client) => {
+        if (client !== socket) {
+          send(client, message)
+        }
+      })
     }
   })
 

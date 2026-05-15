@@ -5,6 +5,7 @@ import {
   CircleDot,
   Copy,
   Download,
+  Eye,
   FileJson,
   FileText,
   FolderOpen,
@@ -64,11 +65,17 @@ type SessionExport = {
   state: SessionState
 }
 
+type FollowEvent =
+  | { kind: 'worksheet'; worksheetId: string }
+  | { kind: 'field'; worksheetId: string; fieldId: string }
+  | { kind: 'scroll'; y: number }
+
 type WireMessage =
   | { type: 'join'; room: string; participantId: string; role: Role; state: SessionState }
   | { type: 'state'; state: SessionState; participantCount: number }
   | { type: 'presence'; participantCount: number }
   | { type: 'sync'; state: SessionState; participantId: string; role: Role }
+  | { type: 'follow'; event: FollowEvent; participantId: string; role: Role }
 
 const templates: Worksheet[] = [
   {
@@ -733,12 +740,16 @@ function App() {
   const [participants, setParticipants] = useState(1)
   const [notice, setNotice] = useState('Session autosaves in this browser and on the room server.')
   const [takeawayOpen, setTakeawayOpen] = useState(false)
+  const [followMode, setFollowMode] = useState(false)
+  const [activeWorksheetId, setActiveWorksheetId] = useState(session.activeWorksheetId)
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const applyingFollowRef = useRef(false)
+  const lastScrollEventRef = useRef(0)
   const participantId = useMemo(() => crypto.randomUUID(), [])
   const activeWorksheet =
-    session.worksheets.find((worksheet) => worksheet.id === session.activeWorksheetId) ??
+    session.worksheets.find((worksheet) => worksheet.id === activeWorksheetId) ??
     session.worksheets[0]
   const shareUrl = `${window.location.origin}${window.location.pathname}?room=${room}`
 
@@ -746,6 +757,13 @@ function App() {
     sessionRef.current = session
     localStorage.setItem(getSavedSessionKey(room), JSON.stringify(session))
   }, [room, session])
+
+  const sendFollowEvent = (event: FollowEvent) => {
+    const message: WireMessage = { type: 'follow', event, participantId, role }
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message))
+    }
+  }
 
   useEffect(() => {
     let reconnect: number | undefined
@@ -770,6 +788,33 @@ function App() {
           setParticipants(message.participantCount)
         }
         if (message.type === 'presence') setParticipants(message.participantCount)
+        if (
+          message.type === 'follow' &&
+          followMode &&
+          message.participantId !== participantId
+        ) {
+          if (message.event.kind === 'worksheet') {
+            setActiveWorksheetId(message.event.worksheetId)
+          }
+          if (message.event.kind === 'field') {
+            const event = message.event
+            setActiveWorksheetId(event.worksheetId)
+            window.setTimeout(() => {
+              const target = document.querySelector<HTMLElement>(
+                `[data-follow-field="${event.fieldId}"]`,
+              )
+              target?.focus()
+              target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+            }, 80)
+          }
+          if (message.event.kind === 'scroll') {
+            applyingFollowRef.current = true
+            window.scrollTo({ top: message.event.y, behavior: 'smooth' })
+            window.setTimeout(() => {
+              applyingFollowRef.current = false
+            }, 350)
+          }
+        }
       })
 
       socket.addEventListener('close', () => {
@@ -784,7 +829,20 @@ function App() {
       window.clearTimeout(reconnect)
       socketRef.current?.close()
     }
-  }, [participantId, role, room])
+  }, [followMode, participantId, role, room])
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (applyingFollowRef.current) return
+      const now = Date.now()
+      if (now - lastScrollEventRef.current < 250) return
+      lastScrollEventRef.current = now
+      sendFollowEvent({ kind: 'scroll', y: window.scrollY })
+    }
+
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    return () => window.removeEventListener('scroll', handleScroll)
+  })
 
   const updateSession = (updater: (current: SessionState) => SessionState) => {
     setSession((current) => {
@@ -835,7 +893,9 @@ function App() {
         setNotice('The saved restore point could not be read.')
         return
       }
-      updateSession(() => normalizeSession(restored))
+      const normalized = normalizeSession(restored)
+      setActiveWorksheetId(normalized.activeWorksheetId)
+      updateSession(() => normalized)
       setNotice('Restored the browser save point and synced it to the room.')
     } catch {
       setNotice('The saved restore point could not be read.')
@@ -881,7 +941,9 @@ function App() {
         setNotice('That file does not look like an ACT session export.')
         return
       }
-      updateSession(() => normalizeSession({ ...imported, updatedAt: Date.now() }))
+      const normalized = normalizeSession(imported)
+      setActiveWorksheetId(normalized.activeWorksheetId)
+      updateSession(() => normalized)
       setNotice('Imported the session file and synced it to the room.')
     } catch {
       setNotice('The selected file could not be imported.')
@@ -982,6 +1044,15 @@ function App() {
             <ShieldCheck aria-hidden="true" />
             <span>Use with a HIPAA-ready host and BAA before PHI</span>
           </div>
+          <button
+            className={`follow-toggle ${followMode ? 'selected' : ''}`}
+            type="button"
+            aria-pressed={followMode}
+            onClick={() => setFollowMode((enabled) => !enabled)}
+          >
+            <Eye aria-hidden="true" />
+            Follow {followMode ? 'on' : 'off'}
+          </button>
         </div>
 
         <div className="safety-note">
@@ -1074,9 +1145,10 @@ function App() {
                 key={worksheet.id}
                 className={active ? 'active' : ''}
                 type="button"
-                onClick={() =>
-                  updateSession((current) => ({ ...current, activeWorksheetId: worksheet.id }))
-                }
+                onClick={() => {
+                  setActiveWorksheetId(worksheet.id)
+                  sendFollowEvent({ kind: 'worksheet', worksheetId: worksheet.id })
+                }}
               >
                 <Icon aria-hidden="true" />
                 <span>{worksheet.shortName}</span>
@@ -1096,8 +1168,16 @@ function App() {
                 <h3>{field.prompt}</h3>
               </div>
               <textarea
+                data-follow-field={field.id}
                 value={field.value}
                 placeholder={field.placeholder}
+                onFocus={() =>
+                  sendFollowEvent({
+                    kind: 'field',
+                    worksheetId: activeWorksheet.id,
+                    fieldId: field.id,
+                  })
+                }
                 onChange={(event) => updateWorksheetField(field.id, event.target.value)}
               />
             </article>

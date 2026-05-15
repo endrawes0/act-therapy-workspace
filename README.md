@@ -35,6 +35,12 @@ npm start
 Then open `http://localhost:4173`. Each generated `?room=` URL is a shared
 session room.
 
+## Collaboration
+
+Worksheet content syncs live for everyone in the same room. `Follow` mode is
+off by default; when a participant turns it on, their view follows another
+participant's focus changes, worksheet field focus, and scroll position.
+
 ## Deployment
 
 The production server in `server.mjs` serves the built React app from `dist` and
