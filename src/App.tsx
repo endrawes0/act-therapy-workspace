@@ -1,6 +1,7 @@
 import {
   Activity,
   Check,
+  ChevronDown,
   CircleDot,
   Copy,
   Download,
@@ -731,6 +732,7 @@ function App() {
   const [status, setStatus] = useState<ConnectionStatus>('offline')
   const [participants, setParticipants] = useState(1)
   const [notice, setNotice] = useState('Session autosaves in this browser and on the room server.')
+  const [takeawayOpen, setTakeawayOpen] = useState(false)
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -982,68 +984,6 @@ function App() {
           </div>
         </div>
 
-        <div className="notes-box">
-          <div className="rail-heading">
-            <MessageSquareText aria-hidden="true" />
-            <h3>Shared notes</h3>
-          </div>
-          <textarea
-            value={session.sessionNotes}
-            placeholder="Track homework, resonant language, consent notes, or follow-up items."
-            onChange={(event) =>
-              updateSession((current) => ({ ...current, sessionNotes: event.target.value }))
-            }
-          />
-        </div>
-
-        <div className="continuity-box">
-          <div className="rail-heading">
-            <Save aria-hidden="true" />
-            <h3>Save and take-away</h3>
-          </div>
-          <p>{notice}</p>
-          <div className="continuity-grid">
-            <button type="button" onClick={saveSnapshot}>
-              <Save aria-hidden="true" />
-              Save
-            </button>
-            <button type="button" onClick={restoreSnapshot}>
-              <FolderOpen aria-hidden="true" />
-              Restore
-            </button>
-            <button type="button" onClick={exportMarkdown}>
-              <FileText aria-hidden="true" />
-              Summary
-            </button>
-            <button type="button" onClick={exportFocusVisual}>
-              <ImageDown aria-hidden="true" />
-              Visual
-            </button>
-            <button type="button" onClick={exportJson}>
-              <FileJson aria-hidden="true" />
-              Session
-            </button>
-            <button type="button" onClick={() => fileInputRef.current?.click()}>
-              <Upload aria-hidden="true" />
-              Import
-            </button>
-            <button type="button" onClick={() => window.print()}>
-              <Download aria-hidden="true" />
-              Print
-            </button>
-          </div>
-          <input
-            ref={fileInputRef}
-            className="file-input"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => importSession(event.target.files?.[0])}
-          />
-          <span className="saved-stamp">
-            Browser save: {new Date(session.updatedAt).toLocaleTimeString()}
-          </span>
-        </div>
-
         <div className="safety-note">
           <Lock aria-hidden="true" />
           <p>
@@ -1060,9 +1000,68 @@ function App() {
             <h2>{activeWorksheet.name}</h2>
             <p>{activeWorksheet.focus}</p>
           </div>
-          <div className="progress-chip">
-            <Check aria-hidden="true" />
-            {completedFields}/{totalFields} prompts started
+          <div className="workspace-actions">
+            <div className="progress-chip">
+              <Check aria-hidden="true" />
+              {completedFields}/{totalFields} prompts started
+            </div>
+            <div className="takeaway-menu">
+              <button
+                className="takeaway-trigger"
+                type="button"
+                aria-expanded={takeawayOpen}
+                onClick={() => setTakeawayOpen((open) => !open)}
+              >
+                <Save aria-hidden="true" />
+                Save and take-away
+                <ChevronDown aria-hidden="true" />
+              </button>
+              {takeawayOpen ? (
+                <div className="takeaway-panel">
+                  <p>{notice}</p>
+                  <div className="continuity-grid">
+                    <button type="button" onClick={saveSnapshot}>
+                      <Save aria-hidden="true" />
+                      Save
+                    </button>
+                    <button type="button" onClick={restoreSnapshot}>
+                      <FolderOpen aria-hidden="true" />
+                      Restore
+                    </button>
+                    <button type="button" onClick={exportMarkdown}>
+                      <FileText aria-hidden="true" />
+                      Summary
+                    </button>
+                    <button type="button" onClick={exportFocusVisual}>
+                      <ImageDown aria-hidden="true" />
+                      Visual
+                    </button>
+                    <button type="button" onClick={exportJson}>
+                      <FileJson aria-hidden="true" />
+                      Session
+                    </button>
+                    <button type="button" onClick={() => fileInputRef.current?.click()}>
+                      <Upload aria-hidden="true" />
+                      Import
+                    </button>
+                    <button type="button" onClick={() => window.print()}>
+                      <Download aria-hidden="true" />
+                      Print
+                    </button>
+                  </div>
+                  <span className="saved-stamp">
+                    Browser save: {new Date(session.updatedAt).toLocaleTimeString()}
+                  </span>
+                </div>
+              ) : null}
+              <input
+                ref={fileInputRef}
+                className="file-input"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => importSession(event.target.files?.[0])}
+              />
+            </div>
           </div>
         </header>
 
@@ -1103,6 +1102,20 @@ function App() {
               />
             </article>
           ))}
+        </section>
+
+        <section className="notes-box workspace-notes">
+          <div className="rail-heading">
+            <MessageSquareText aria-hidden="true" />
+            <h3>Shared notes</h3>
+          </div>
+          <textarea
+            value={session.sessionNotes}
+            placeholder="Track homework, resonant language, consent notes, or follow-up items."
+            onChange={(event) =>
+              updateSession((current) => ({ ...current, sessionNotes: event.target.value }))
+            }
+          />
         </section>
       </section>
     </main>

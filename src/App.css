@@ -1,7 +1,7 @@
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(280px, 340px) 1fr;
+  grid-template-columns: minmax(224px, 272px) 1fr;
   background: #f7f6f2;
   color: #24302c;
 }
@@ -10,10 +10,10 @@
   min-height: 100vh;
   background: #fcfbf7;
   border-right: 1px solid #dedbd0;
-  padding: 24px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
 }
 
 .brand-block {
@@ -60,7 +60,7 @@ p {
 }
 
 h1 {
-  font-size: 1.55rem;
+  font-size: 1.4rem;
   line-height: 1.1;
 }
 
@@ -79,7 +79,6 @@ h3 {
 .session-panel,
 .collab-box,
 .notes-box,
-.continuity-box,
 .safety-note,
 .prompt-card {
   border: 1px solid #dedbd0;
@@ -170,12 +169,6 @@ button.selected,
   gap: 12px;
 }
 
-.continuity-box {
-  padding: 14px;
-  display: grid;
-  gap: 12px;
-}
-
 .notes-box {
   padding: 14px;
 }
@@ -184,7 +177,7 @@ button.selected,
   min-height: 150px;
 }
 
-.continuity-box p,
+.takeaway-panel p,
 .saved-stamp {
   color: #5c6761;
   font-size: 0.84rem;
@@ -261,6 +254,7 @@ button.selected,
 }
 
 .workspace-header {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -285,6 +279,48 @@ button.selected,
   background: #eef7ef;
   font-weight: 750;
   font-size: 0.88rem;
+}
+
+.workspace-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.takeaway-menu {
+  position: relative;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.takeaway-trigger {
+  min-width: max-content;
+  border-color: #c7d6cb;
+  background: #fffefa;
+  padding: 9px 12px;
+}
+
+.takeaway-trigger[aria-expanded='true'] {
+  color: #143c34;
+  border-color: #a9c9b8;
+  background: #eef7ef;
+}
+
+.takeaway-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  width: min(420px, calc(100vw - 32px));
+  border: 1px solid #dedbd0;
+  border-radius: 8px;
+  background: #fffefa;
+  box-shadow: 0 18px 38px rgba(31, 41, 38, 0.14);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
 }
 
 .worksheet-tabs {
@@ -317,6 +353,10 @@ button.selected,
 
 .activity-board.life-map-board {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.workspace-notes textarea {
+  min-height: 160px;
 }
 
 .prompt-card {
@@ -364,6 +404,10 @@ button.selected,
     border-bottom: 1px solid #dedbd0;
   }
 
+  .workspace-header {
+    flex-wrap: wrap;
+  }
+
   .activity-board {
     grid-template-columns: 1fr;
   }
@@ -391,6 +435,24 @@ button.selected,
     display: grid;
   }
 
+  .workspace-actions {
+    margin-left: 0;
+    display: grid;
+  }
+
+  .takeaway-menu {
+    justify-items: stretch;
+  }
+
+  .takeaway-trigger {
+    width: 100%;
+  }
+
+  .takeaway-panel {
+    position: static;
+    width: 100%;
+  }
+
   .worksheet-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -414,7 +476,7 @@ button.selected,
 
   .role-switch,
   .collab-box,
-  .continuity-box,
+  .takeaway-menu,
   .worksheet-tabs,
   .safety-note,
   .progress-chip {
