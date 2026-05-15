@@ -14,7 +14,6 @@ import {
   MessageSquareText,
   MonitorUp,
   PenLine,
-  RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
@@ -721,23 +720,6 @@ function App() {
     }))
   }
 
-  const insertCue = (worksheetId: string, fieldId: string, value: string) => {
-    updateSession((current) => ({
-      ...current,
-      activeWorksheetId: worksheetId,
-      worksheets: current.worksheets.map((worksheet) =>
-        worksheet.id === worksheetId
-          ? {
-              ...worksheet,
-              sections: worksheet.sections.map((field) =>
-                field.id === fieldId ? { ...field, value } : field,
-              ),
-            }
-          : worksheet,
-      ),
-    }))
-  }
-
   const copyLink = async () => {
     await navigator.clipboard.writeText(shareUrl)
     setNotice('Session link copied.')
@@ -909,6 +891,20 @@ function App() {
           </div>
         </div>
 
+        <div className="notes-box">
+          <div className="rail-heading">
+            <MessageSquareText aria-hidden="true" />
+            <h3>Shared notes</h3>
+          </div>
+          <textarea
+            value={session.sessionNotes}
+            placeholder="Track homework, resonant language, consent notes, or follow-up items."
+            onChange={(event) =>
+              updateSession((current) => ({ ...current, sessionNotes: event.target.value }))
+            }
+          />
+        </div>
+
         <div className="continuity-box">
           <div className="rail-heading">
             <Save aria-hidden="true" />
@@ -956,6 +952,14 @@ function App() {
             Browser save: {new Date(session.updatedAt).toLocaleTimeString()}
           </span>
         </div>
+
+        <div className="safety-note">
+          <Lock aria-hidden="true" />
+          <p>
+            This prototype does not replace clinical judgment, emergency care,
+            consent procedures, or compliant record systems.
+          </p>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -991,86 +995,21 @@ function App() {
           })}
         </nav>
 
-        <div className="worksheet-layout">
-          <section className="activity-board" aria-label={`${activeWorksheet.name} worksheet`}>
-            {activeWorksheet.sections.map((field) => (
-              <article className="prompt-card" key={field.id}>
-                <div>
-                  <p className="eyebrow">{field.label}</p>
-                  <h3>{field.prompt}</h3>
-                </div>
-                <textarea
-                  value={field.value}
-                  placeholder={field.placeholder}
-                  onChange={(event) => updateWorksheetField(field.id, event.target.value)}
-                />
-              </article>
-            ))}
-          </section>
-
-          <aside className="clinical-rail" aria-label="Session notes and safeguards">
-            <section>
-              <div className="rail-heading">
-                <MessageSquareText aria-hidden="true" />
-                <h3>Shared notes</h3>
+        <section className="activity-board" aria-label={`${activeWorksheet.name} worksheet`}>
+          {activeWorksheet.sections.map((field) => (
+            <article className="prompt-card" key={field.id}>
+              <div>
+                <p className="eyebrow">{field.label}</p>
+                <h3>{field.prompt}</h3>
               </div>
               <textarea
-                value={session.sessionNotes}
-                placeholder="Track homework, language that resonated, consent notes, or items for follow-up."
-                onChange={(event) =>
-                  updateSession((current) => ({ ...current, sessionNotes: event.target.value }))
-                }
+                value={field.value}
+                placeholder={field.placeholder}
+                onChange={(event) => updateWorksheetField(field.id, event.target.value)}
               />
-            </section>
-
-            <section className="exercise-stack">
-              <div className="rail-heading">
-                <RefreshCw aria-hidden="true" />
-                <h3>Quick activities</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  insertCue('defusion-lab', 'technique', 'I am noticing the thought that...')
-                }
-              >
-                Add defusion starter
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  insertCue(
-                    'acceptance-expansion',
-                    'space',
-                    'Breathe around the sensation and make 10% more room for it.',
-                  )
-                }
-              >
-                Add expansion cue
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  insertCue(
-                    'choice-point',
-                    'toward',
-                    'One small toward move I can take in the next 24 hours is...',
-                  )
-                }
-              >
-                Add toward move
-              </button>
-            </section>
-
-            <section className="safety-note">
-              <Lock aria-hidden="true" />
-              <p>
-                This prototype does not replace clinical judgment, emergency care,
-                consent procedures, or compliant record systems.
-              </p>
-            </section>
-          </aside>
-        </div>
+            </article>
+          ))}
+        </section>
       </section>
     </main>
   )

@@ -78,8 +78,9 @@ h3 {
 
 .session-panel,
 .collab-box,
+.notes-box,
 .continuity-box,
-.clinical-rail section,
+.safety-note,
 .prompt-card {
   border: 1px solid #dedbd0;
   border-radius: 8px;
@@ -173,6 +174,14 @@ button.selected,
   padding: 14px;
   display: grid;
   gap: 12px;
+}
+
+.notes-box {
+  padding: 14px;
+}
+
+.notes-box textarea {
+  min-height: 150px;
 }
 
 .continuity-box p,
@@ -299,22 +308,15 @@ button.selected,
   white-space: nowrap;
 }
 
-.worksheet-layout {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
-  gap: 18px;
-}
-
 .activity-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
   gap: 14px;
   align-content: start;
 }
 
 .prompt-card {
-  min-height: 430px;
+  min-height: 500px;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -323,17 +325,7 @@ button.selected,
 
 .prompt-card textarea {
   flex: 1;
-  min-height: 260px;
-}
-
-.clinical-rail {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.clinical-rail section {
-  padding: 15px;
+  min-height: 320px;
 }
 
 .rail-heading {
@@ -343,26 +335,10 @@ button.selected,
   gap: 8px;
 }
 
-.clinical-rail textarea {
-  min-height: 180px;
-}
-
-.exercise-stack {
-  display: grid;
-  gap: 10px;
-}
-
-.exercise-stack button {
-  justify-content: flex-start;
-  min-height: 42px;
-  padding-inline: 11px;
-  border-color: #d6d0c4;
-  background: #f8f5eb;
-}
-
 .safety-note {
   display: flex;
   gap: 11px;
+  padding: 14px;
   color: #5c4f32;
   background: #fff7df !important;
 }
@@ -384,7 +360,6 @@ button.selected,
     border-bottom: 1px solid #dedbd0;
   }
 
-  .worksheet-layout,
   .activity-board {
     grid-template-columns: 1fr;
   }
@@ -433,7 +408,6 @@ button.selected,
   .collab-box,
   .continuity-box,
   .worksheet-tabs,
-  .exercise-stack,
   .safety-note,
   .progress-chip {
     display: none;
@@ -448,13 +422,12 @@ button.selected,
     margin-bottom: 18px;
   }
 
-  .worksheet-layout,
   .activity-board {
     display: block;
   }
 
   .prompt-card,
-  .clinical-rail section,
+  .notes-box,
   .session-panel {
     break-inside: avoid;
     border-color: #d0d0d0;
