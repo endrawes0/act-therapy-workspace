@@ -315,6 +315,10 @@ button.selected,
   align-content: start;
 }
 
+.activity-board.life-map-board {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .prompt-card {
   min-height: 500px;
   padding: 16px;
@@ -361,6 +365,10 @@ button.selected,
   }
 
   .activity-board {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-board.life-map-board {
     grid-template-columns: 1fr;
   }
 

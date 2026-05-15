@@ -1086,7 +1086,10 @@ function App() {
           })}
         </nav>
 
-        <section className="activity-board" aria-label={`${activeWorksheet.name} worksheet`}>
+        <section
+          className={`activity-board ${activeWorksheet.id === 'life-map' ? 'life-map-board' : ''}`}
+          aria-label={`${activeWorksheet.name} worksheet`}
+        >
           {activeWorksheet.sections.map((field) => (
             <article className="prompt-card" key={field.id}>
               <div>
