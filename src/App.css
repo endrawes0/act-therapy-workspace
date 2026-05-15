@@ -78,6 +78,7 @@ h3 {
 
 .session-panel,
 .collab-box,
+.continuity-box,
 .clinical-rail section,
 .prompt-card {
   border: 1px solid #dedbd0;
@@ -166,6 +167,37 @@ button.selected,
   padding: 14px;
   display: grid;
   gap: 12px;
+}
+
+.continuity-box {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.continuity-box p,
+.saved-stamp {
+  color: #5c6761;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.continuity-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.continuity-grid button {
+  justify-content: flex-start;
+  min-height: 42px;
+  padding-inline: 10px;
+  border-color: #d6d0c4;
+  background: #f8f5eb;
+}
+
+.file-input {
+  display: none;
 }
 
 .status-row,
@@ -382,5 +414,57 @@ button.selected,
 
   .role-switch {
     grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  .app-shell {
+    display: block;
+    background: #ffffff;
+  }
+
+  .sidebar {
+    min-height: 0;
+    border: 0;
+    padding: 0 0 18px;
+  }
+
+  .role-switch,
+  .collab-box,
+  .continuity-box,
+  .worksheet-tabs,
+  .exercise-stack,
+  .safety-note,
+  .progress-chip {
+    display: none;
+  }
+
+  .workspace {
+    padding: 0;
+  }
+
+  .workspace-header {
+    display: block;
+    margin-bottom: 18px;
+  }
+
+  .worksheet-layout,
+  .activity-board {
+    display: block;
+  }
+
+  .prompt-card,
+  .clinical-rail section,
+  .session-panel {
+    break-inside: avoid;
+    border-color: #d0d0d0;
+    margin-bottom: 14px;
+  }
+
+  textarea,
+  input {
+    border: 0;
+    min-height: auto;
+    padding: 0;
   }
 }

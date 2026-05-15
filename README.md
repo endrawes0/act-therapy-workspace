@@ -49,5 +49,17 @@ PORT=4173 npm start
 
 For telehealth or in-office use with protected health information, deploy only
 on infrastructure covered by the required privacy, security, consent, and BAA
-requirements. The current WebSocket room store is in memory, so session contents
-are not persisted after server restart.
+requirements. The current server persists room state as JSON files under
+`data/sessions`, which is useful for restoration but should be replaced or
+hardened with encrypted storage, access controls, retention policies, and audit
+logging before clinical production use.
+
+## Client Take-Away
+
+Use the save panel in the app to:
+
+- save a browser restore point for the current room
+- restore the current browser's saved room state
+- export a Markdown session summary for the client
+- export a JSON session file that can be imported later
+- print or save the current worksheet view as a PDF

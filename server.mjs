@@ -1,6 +1,7 @@
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createServer } from 'node:http'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -8,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 const server = createServer(app)
 const rooms = new Map()
+const dataDir = path.join(__dirname, 'data', 'sessions')
 
 app.use(express.static(path.join(__dirname, 'dist')))
 app.get(/.*/, (_request, response) => {
@@ -16,10 +18,27 @@ app.get(/.*/, (_request, response) => {
 
 const wss = new WebSocketServer({ server, path: '/collaboration' })
 
-const getRoom = (roomId, initialState) => {
+const safeRoomId = (roomId) => roomId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
+const getSessionPath = (roomId) => path.join(dataDir, `${safeRoomId(roomId)}.json`)
+
+const loadPersistedState = async (roomId) => {
+  try {
+    return JSON.parse(await readFile(getSessionPath(roomId), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+const persistState = async (roomId, state) => {
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(getSessionPath(roomId), JSON.stringify(state, null, 2))
+}
+
+const getRoom = async (roomId, initialState) => {
   if (!rooms.has(roomId)) {
+    const persistedState = await loadPersistedState(roomId)
     rooms.set(roomId, {
-      state: initialState,
+      state: persistedState ?? initialState,
       clients: new Set(),
     })
   }
@@ -40,7 +59,7 @@ const broadcastPresence = (room) => {
 wss.on('connection', (socket) => {
   let currentRoomId = null
 
-  socket.on('message', (raw) => {
+  socket.on('message', async (raw) => {
     let message
     try {
       message = JSON.parse(raw.toString())
@@ -50,7 +69,7 @@ wss.on('connection', (socket) => {
 
     if (message.type === 'join') {
       currentRoomId = message.room
-      const room = getRoom(message.room, message.state)
+      const room = await getRoom(message.room, message.state)
       room.clients.add(socket)
       send(socket, {
         type: 'state',
@@ -65,6 +84,9 @@ wss.on('connection', (socket) => {
       const room = rooms.get(currentRoomId)
       if (!room) return
       room.state = message.state
+      persistState(currentRoomId, room.state).catch((error) => {
+        console.error(`Failed to save room ${currentRoomId}:`, error)
+      })
       room.clients.forEach((client) => {
         if (client !== socket) {
           send(client, {

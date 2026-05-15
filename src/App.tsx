@@ -3,6 +3,10 @@ import {
   Check,
   CircleDot,
   Copy,
+  Download,
+  FileJson,
+  FileText,
+  FolderOpen,
   HeartHandshake,
   Link,
   Lock,
@@ -10,8 +14,10 @@ import {
   MonitorUp,
   PenLine,
   RefreshCw,
+  Save,
   ShieldCheck,
   Sparkles,
+  Upload,
   Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -46,6 +52,14 @@ type SessionState = {
   activeWorksheetId: string
   lastEditedBy: Role
   updatedAt: number
+}
+
+type SessionExport = {
+  app: 'act-therapy-workspace'
+  version: 1
+  room: string
+  exportedAt: string
+  state: SessionState
 }
 
 type WireMessage =
@@ -303,14 +317,75 @@ const getSocketUrl = () => {
   return `${protocol}://${window.location.host}/collaboration`
 }
 
+const getSavedSessionKey = (room: string) => `act-session:${room}`
+
+const getExportName = (session: SessionState, extension: 'json' | 'md') => {
+  const client = session.clientName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  const date = new Date(session.updatedAt).toISOString().slice(0, 10)
+  return `act-session-${client || 'client'}-${date}.${extension}`
+}
+
+const downloadText = (filename: string, text: string, type: string) => {
+  const blob = new Blob([text], { type })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+const formatSessionMarkdown = (session: SessionState) => {
+  const lines = [
+    `# ACT Session Summary`,
+    '',
+    `Client: ${session.clientName}`,
+    `Counselor: ${session.counselorName}`,
+    `Updated: ${new Date(session.updatedAt).toLocaleString()}`,
+    '',
+    `## Session Intention`,
+    session.intention || 'No intention recorded.',
+    '',
+  ]
+
+  session.worksheets.forEach((worksheet) => {
+    const completedSections = worksheet.sections.filter((field) => field.value.trim())
+    if (completedSections.length === 0) return
+    lines.push(`## ${worksheet.name}`, worksheet.focus, '')
+    completedSections.forEach((field) => {
+      lines.push(`### ${field.label}`, field.value.trim(), '')
+    })
+  })
+
+  if (session.sessionNotes.trim()) {
+    lines.push('## Shared Notes', session.sessionNotes.trim(), '')
+  }
+
+  return lines.join('\n')
+}
+
+const isSessionState = (value: unknown): value is SessionState => {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<SessionState>
+  return (
+    typeof candidate.clientName === 'string' &&
+    typeof candidate.counselorName === 'string' &&
+    typeof candidate.intention === 'string' &&
+    Array.isArray(candidate.worksheets) &&
+    typeof candidate.activeWorksheetId === 'string'
+  )
+}
+
 function App() {
   const [session, setSession] = useState<SessionState>(createInitialState)
   const [role, setRole] = useState<Role>('counselor')
   const [room] = useState(getRoomFromUrl)
   const [status, setStatus] = useState<ConnectionStatus>('offline')
   const [participants, setParticipants] = useState(1)
+  const [notice, setNotice] = useState('Session autosaves in this browser and on the room server.')
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const participantId = useMemo(() => crypto.randomUUID(), [])
   const activeWorksheet =
     session.worksheets.find((worksheet) => worksheet.id === session.activeWorksheetId) ??
@@ -319,7 +394,8 @@ function App() {
 
   useEffect(() => {
     sessionRef.current = session
-  }, [session])
+    localStorage.setItem(getSavedSessionKey(room), JSON.stringify(session))
+  }, [room, session])
 
   useEffect(() => {
     let reconnect: number | undefined
@@ -406,6 +482,70 @@ function App() {
 
   const copyLink = async () => {
     await navigator.clipboard.writeText(shareUrl)
+    setNotice('Session link copied.')
+  }
+
+  const saveSnapshot = () => {
+    updateSession((current) => current)
+    setNotice('Saved a browser restore point for this room.')
+  }
+
+  const restoreSnapshot = () => {
+    const saved = localStorage.getItem(getSavedSessionKey(room))
+    if (!saved) {
+      setNotice('No browser restore point exists for this room yet.')
+      return
+    }
+    try {
+      const restored = JSON.parse(saved) as unknown
+      if (!isSessionState(restored)) {
+        setNotice('The saved restore point could not be read.')
+        return
+      }
+      updateSession(() => restored)
+      setNotice('Restored the browser save point and synced it to the room.')
+    } catch {
+      setNotice('The saved restore point could not be read.')
+    }
+  }
+
+  const exportJson = () => {
+    const payload: SessionExport = {
+      app: 'act-therapy-workspace',
+      version: 1,
+      room,
+      exportedAt: new Date().toISOString(),
+      state: session,
+    }
+    downloadText(
+      getExportName(session, 'json'),
+      JSON.stringify(payload, null, 2),
+      'application/json',
+    )
+    setNotice('Downloaded a restorable session file.')
+  }
+
+  const exportMarkdown = () => {
+    downloadText(getExportName(session, 'md'), formatSessionMarkdown(session), 'text/markdown')
+    setNotice('Downloaded a client-friendly session summary.')
+  }
+
+  const importSession = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<SessionExport> | SessionState
+      const imported = isSessionState(parsed) ? parsed : parsed.state
+      if (!isSessionState(imported)) {
+        setNotice('That file does not look like an ACT session export.')
+        return
+      }
+      updateSession(() => ({ ...imported, updatedAt: Date.now() }))
+      setNotice('Imported the session file and synced it to the room.')
+    } catch {
+      setNotice('The selected file could not be imported.')
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const completedFields = session.worksheets.reduce(
@@ -500,6 +640,50 @@ function App() {
             <ShieldCheck aria-hidden="true" />
             <span>Use with a HIPAA-ready host and BAA before PHI</span>
           </div>
+        </div>
+
+        <div className="continuity-box">
+          <div className="rail-heading">
+            <Save aria-hidden="true" />
+            <h3>Save and take-away</h3>
+          </div>
+          <p>{notice}</p>
+          <div className="continuity-grid">
+            <button type="button" onClick={saveSnapshot}>
+              <Save aria-hidden="true" />
+              Save
+            </button>
+            <button type="button" onClick={restoreSnapshot}>
+              <FolderOpen aria-hidden="true" />
+              Restore
+            </button>
+            <button type="button" onClick={exportMarkdown}>
+              <FileText aria-hidden="true" />
+              Summary
+            </button>
+            <button type="button" onClick={exportJson}>
+              <FileJson aria-hidden="true" />
+              Session
+            </button>
+            <button type="button" onClick={() => fileInputRef.current?.click()}>
+              <Upload aria-hidden="true" />
+              Import
+            </button>
+            <button type="button" onClick={() => window.print()}>
+              <Download aria-hidden="true" />
+              Print
+            </button>
+          </div>
+          <input
+            ref={fileInputRef}
+            className="file-input"
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => importSession(event.target.files?.[0])}
+          />
+          <span className="saved-stamp">
+            Browser save: {new Date(session.updatedAt).toLocaleTimeString()}
+          </span>
         </div>
       </aside>
 
