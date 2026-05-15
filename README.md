@@ -64,3 +64,17 @@ Use the save panel in the app to:
 - export a worksheet-specific SVG visual reference for the active focus
 - export a JSON session file that can be imported later
 - print or save the current worksheet view as a PDF
+
+## Visual Worksheet Exports
+
+The `Visual` button exports an SVG handout for the currently selected focus.
+
+| Focus | Visual worksheet export |
+| --- | --- |
+| Values | Life Map / Values Compass |
+| Action | Committed Action Path |
+| Defusion | Hexaflex with Cognitive Defusion highlighted |
+| Choice Point | Choice Point fork map |
+| Matrix | ACT Matrix |
+| Acceptance | Hexaflex with Acceptance highlighted |
+| Observer | Hexaflex with Self-as-Context highlighted |
