@@ -4,6 +4,10 @@ An interactive Acceptance and Commitment Therapy workspace for shared
 client/counselor sessions. The app includes common ACT worksheets and activities
 with live room-based editing over WebSockets.
 
+## Demo
+
+[Open the public Render demo](https://act-therapy-workspace-demo.onrender.com).
+
 ## Included Activities
 
 - Values Compass
