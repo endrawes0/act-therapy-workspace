@@ -8,6 +8,14 @@ with live room-based editing over WebSockets.
 
 [Open the public Render demo](https://act-therapy-workspace-demo.onrender.com).
 
+## Disclosure
+
+This application was coded with assistance from OpenAI Codex. It is provided as
+a public demo and prototype only. No guarantee is made that the code is safe,
+secure, correct, complete, clinically appropriate, or suitable for production
+use. Review, test, and harden the application before relying on it for any real
+workflow, especially one involving sensitive, clinical, or protected information.
+
 ## Included Activities
 
 - Values Compass
