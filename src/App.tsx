@@ -754,6 +754,7 @@ function App() {
   const [activeWorksheetId, setActiveWorksheetId] = useState(session.activeWorksheetId)
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
+  const followModeRef = useRef(followMode)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const applyingFollowRef = useRef(false)
   const lastScrollEventRef = useRef(0)
@@ -769,6 +770,11 @@ function App() {
     localStorage.setItem(getSavedSessionKey(room), JSON.stringify(session))
   }, [room, session])
 
+  const setFollowModeState = (enabled: boolean) => {
+    followModeRef.current = enabled
+    setFollowMode(enabled)
+  }
+
   const sendFollowEvent = (event: FollowEvent) => {
     const message: WireMessage = { type: 'follow', event, participantId, role }
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -782,7 +788,7 @@ function App() {
       socketRef.current.send(JSON.stringify(message))
     }
     if (!enabled) {
-      setFollowMode(false)
+      setFollowModeState(false)
       setFollowedFieldId(null)
     }
   }
@@ -814,20 +820,20 @@ function App() {
           setParticipants(message.participantCount)
           setRoomFollowerId(message.followerId ?? null)
           if (message.followerId !== participantId) {
-            setFollowMode(false)
+            setFollowModeState(false)
           }
         }
         if (message.type === 'follow-state') {
           setRoomFollowerId(message.followerId)
           const acceptedForMe = message.accepted && message.followerId === participantId
-          setFollowMode(acceptedForMe)
+          setFollowModeState(acceptedForMe)
           if (!acceptedForMe) {
             setFollowedFieldId(null)
           }
         }
         if (
           message.type === 'follow' &&
-          followMode &&
+          followModeRef.current &&
           message.participantId !== participantId
         ) {
           if (message.event.kind === 'worksheet') {
@@ -867,7 +873,7 @@ function App() {
       window.clearTimeout(reconnect)
       socketRef.current?.close()
     }
-  }, [followMode, participantId, role, room])
+  }, [participantId, role, room])
 
   useEffect(() => {
     const handleScroll = () => {
