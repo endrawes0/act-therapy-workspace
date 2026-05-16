@@ -126,6 +126,13 @@ button:focus-visible {
   border-color: #2f6157;
 }
 
+input:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  color: #6f7873;
+  background: #f1eee7;
+}
+
 .role-switch {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -155,6 +162,12 @@ button:hover {
   background: rgba(47, 97, 87, 0.08);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  color: #7b837f;
+  background: #efede6;
+}
+
 button.selected,
 .worksheet-tabs button.active {
   color: #143c34;
@@ -167,6 +180,27 @@ button.selected,
   padding: 14px;
   display: grid;
   gap: 12px;
+}
+
+.room-lock-form {
+  display: grid;
+  gap: 9px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e3ded2;
+}
+
+.room-lock-form button {
+  justify-content: flex-start;
+  border-color: #d6d0c4;
+  background: #f8f5eb;
+  min-height: 42px;
+  padding-inline: 11px;
+}
+
+.room-lock-error {
+  color: #8f3d2f;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .notes-box {
