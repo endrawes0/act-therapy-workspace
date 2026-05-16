@@ -16,6 +16,10 @@ secure, correct, complete, clinically appropriate, or suitable for production
 use. Review, test, and harden the application before relying on it for any real
 workflow, especially one involving sensitive, clinical, or protected information.
 
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
 ## Included Activities
 
 - Values Compass
