@@ -23,6 +23,7 @@ import {
   Upload,
   Users,
 } from 'lucide-react'
+import type { FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
@@ -65,25 +66,40 @@ type SessionExport = {
   state: SessionState
 }
 
+type EncryptedSessionState = {
+  version: 1
+  algorithm: 'AES-GCM'
+  kdf: 'PBKDF2-SHA-256'
+  iterations: number
+  salt: string
+  iv: string
+  ciphertext: string
+}
+
 type FollowEvent =
   | { kind: 'worksheet'; worksheetId: string }
   | { kind: 'field'; worksheetId: string; fieldId: string }
   | { kind: 'scroll'; y: number }
 
 type WireMessage =
+  | { type: 'room-info'; room: string; exists?: boolean; verifierSalt?: string | null; encryptionSalt?: string | null }
   | {
       type: 'join'
       room: string
       participantId: string
       role: Role
-      state: SessionState
+      verifierHash: string
+      verifierSalt?: string
+      encryptionSalt?: string
+      state?: EncryptedSessionState
     }
-  | { type: 'state'; state: SessionState; participantCount: number; followerId?: string | null }
+  | { type: 'state'; state: EncryptedSessionState | null; participantCount: number; followerId?: string | null }
   | { type: 'presence'; participantCount: number; followerId?: string | null }
-  | { type: 'sync'; state: SessionState; participantId: string; role: Role }
+  | { type: 'sync'; state: EncryptedSessionState; participantId: string; role: Role }
   | { type: 'follow'; event: FollowEvent; participantId: string; role: Role }
   | { type: 'follow-control'; enabled: boolean; participantId: string; role: Role }
   | { type: 'follow-state'; accepted: boolean; followerId: string | null }
+  | { type: 'error'; code: string; reason: string }
 
 const templates: Worksheet[] = [
   {
@@ -396,6 +412,102 @@ const getSocketUrl = () => {
 }
 
 const getSavedSessionKey = (room: string) => `act-session:${room}`
+const roomKdfIterations = 210000
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
+const base64ToBytes = (value: string) => {
+  const binary = atob(value)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+const randomBase64 = (length: number) => {
+  const bytes = new Uint8Array(length)
+  crypto.getRandomValues(bytes)
+  return bytesToBase64(bytes)
+}
+
+const getPassphraseBaseKey = (passphrase: string) =>
+  crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveBits', 'deriveKey'],
+  )
+
+const getVerifierHash = async (
+  room: string,
+  passphrase: string,
+  verifierSalt: string,
+) => {
+  const baseKey = await getPassphraseBaseKey(passphrase)
+  const verifierBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: new TextEncoder().encode(`act-room-verifier:v2:${room}:${verifierSalt}`),
+      iterations: roomKdfIterations,
+      hash: 'SHA-256',
+    },
+    baseKey,
+    256,
+  )
+  return bytesToBase64(new Uint8Array(verifierBits))
+}
+
+const getRoomKey = async (passphrase: string, encryptionSalt: string) => {
+  const baseKey = await getPassphraseBaseKey(passphrase)
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: base64ToBytes(encryptionSalt),
+      iterations: roomKdfIterations,
+      hash: 'SHA-256',
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+const encryptSessionState = async (
+  state: SessionState,
+  key: CryptoKey,
+  encryptionSalt: string,
+): Promise<EncryptedSessionState> => {
+  const iv = new Uint8Array(12)
+  crypto.getRandomValues(iv)
+  const plaintext = new TextEncoder().encode(JSON.stringify(state))
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext)
+  return {
+    version: 1,
+    algorithm: 'AES-GCM',
+    kdf: 'PBKDF2-SHA-256',
+    iterations: roomKdfIterations,
+    salt: encryptionSalt,
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  }
+}
+
+const decryptSessionState = async (
+  state: EncryptedSessionState,
+  key: CryptoKey,
+): Promise<SessionState> => {
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(state.iv) },
+    key,
+    base64ToBytes(state.ciphertext),
+  )
+  return JSON.parse(new TextDecoder().decode(plaintext)) as SessionState
+}
 
 const getExportName = (session: SessionState, extension: 'json' | 'md') => {
   const client = session.clientName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -745,8 +857,13 @@ function App() {
   const [role, setRole] = useState<Role>('counselor')
   const [room] = useState(getRoomFromUrl)
   const [status, setStatus] = useState<ConnectionStatus>('offline')
+  const [roomPassphrase, setRoomPassphrase] = useState('')
+  const [roomSecret, setRoomSecret] = useState<string | null>(null)
+  const [roomEncryptionSalt, setRoomEncryptionSalt] = useState<string | null>(null)
+  const [roomKey, setRoomKey] = useState<CryptoKey | null>(null)
+  const [roomLockError, setRoomLockError] = useState('')
   const [participants, setParticipants] = useState(1)
-  const [notice, setNotice] = useState('Session autosaves in this browser and on the room server.')
+  const [notice, setNotice] = useState('Session autosaves locally and syncs as encrypted room data.')
   const [takeawayOpen, setTakeawayOpen] = useState(false)
   const [followMode, setFollowMode] = useState(false)
   const [roomFollowerId, setRoomFollowerId] = useState<string | null>(null)
@@ -754,15 +871,20 @@ function App() {
   const [activeWorksheetId, setActiveWorksheetId] = useState(session.activeWorksheetId)
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
+  const roomEncryptionSaltRef = useRef(roomEncryptionSalt)
+  const roomKeyRef = useRef(roomKey)
   const followModeRef = useRef(followMode)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const applyingFollowRef = useRef(false)
   const lastScrollEventRef = useRef(0)
+  const syncInFlightRef = useRef(false)
+  const pendingSyncRef = useRef<SessionState | null>(null)
   const participantId = useMemo(() => crypto.randomUUID(), [])
   const activeWorksheet =
     session.worksheets.find((worksheet) => worksheet.id === activeWorksheetId) ??
     session.worksheets[0]
   const shareUrl = `${window.location.origin}${window.location.pathname}?room=${room}`
+  const roomUnlocked = Boolean(roomSecret && roomKey && status === 'connected')
   const someoneElseIsFollowing = Boolean(roomFollowerId && roomFollowerId !== participantId)
 
   useEffect(() => {
@@ -770,9 +892,30 @@ function App() {
     localStorage.setItem(getSavedSessionKey(room), JSON.stringify(session))
   }, [room, session])
 
+  useEffect(() => {
+    roomEncryptionSaltRef.current = roomEncryptionSalt
+  }, [roomEncryptionSalt])
+
+  useEffect(() => {
+    roomKeyRef.current = roomKey
+  }, [roomKey])
+
   const setFollowModeState = (enabled: boolean) => {
     followModeRef.current = enabled
     setFollowMode(enabled)
+  }
+
+  const unlockRoom = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const passphrase = roomPassphrase.trim()
+    if (passphrase.length < 8) {
+      setRoomLockError('Use a room passphrase with at least 8 characters.')
+      return
+    }
+    setRoomLockError('')
+    roomKeyRef.current = null
+    setRoomKey(null)
+    setRoomSecret(passphrase)
   }
 
   const sendFollowEvent = (event: FollowEvent) => {
@@ -797,24 +940,85 @@ function App() {
     let reconnect: number | undefined
     let closedByEffect = false
 
+    if (!roomSecret) {
+      return () => undefined
+    }
+
     const connect = () => {
       setStatus('connecting')
       const socket = new WebSocket(getSocketUrl())
       socketRef.current = socket
 
       socket.addEventListener('open', () => {
-        setStatus('connected')
-        socket.send(
-          JSON.stringify({ type: 'join', room, participantId, role, state: sessionRef.current }),
-        )
+        socket.send(JSON.stringify({ type: 'room-info', room }))
       })
 
-      socket.addEventListener('message', (event) => {
+      socket.addEventListener('message', async (event) => {
         const message = JSON.parse(event.data) as WireMessage
+        if (message.type === 'room-info') {
+          try {
+            const verifierSalt = message.verifierSalt ?? randomBase64(16)
+            const encryptionSalt = message.encryptionSalt ?? randomBase64(16)
+            const [verifierHash, derivedRoomKey] = await Promise.all([
+              getVerifierHash(room, roomSecret, verifierSalt),
+              getRoomKey(roomSecret, encryptionSalt),
+            ])
+            setRoomEncryptionSalt(encryptionSalt)
+            roomEncryptionSaltRef.current = encryptionSalt
+            roomKeyRef.current = derivedRoomKey
+            setRoomKey(derivedRoomKey)
+            const joinMessage: WireMessage = {
+              type: 'join',
+              room,
+              participantId,
+              role,
+              verifierHash,
+            }
+
+            if (!message.exists) {
+              joinMessage.verifierSalt = verifierSalt
+              joinMessage.encryptionSalt = encryptionSalt
+              joinMessage.state = await encryptSessionState(
+                sessionRef.current,
+                derivedRoomKey,
+                encryptionSalt,
+              )
+            }
+
+            socket.send(JSON.stringify(joinMessage))
+          } catch {
+            setRoomLockError('The room passphrase could not be prepared in this browser.')
+            setRoomSecret(null)
+            setRoomEncryptionSalt(null)
+            roomEncryptionSaltRef.current = null
+            roomKeyRef.current = null
+            setRoomKey(null)
+            socket.close()
+          }
+          return
+        }
         if (message.type === 'state') {
-          setSession(normalizeSession(message.state))
+          setStatus('connected')
           setParticipants(message.participantCount)
           setRoomFollowerId(message.followerId ?? null)
+          if (message.state) {
+            try {
+              const key = roomKeyRef.current
+              if (!key) throw new Error('Missing room key.')
+              const decrypted = await decryptSessionState(message.state, key)
+              const normalized = normalizeSession(decrypted)
+              setSession(normalized)
+              setActiveWorksheetId(normalized.activeWorksheetId)
+            } catch {
+              setRoomLockError('The passphrase did not decrypt this room.')
+              setRoomSecret(null)
+              setRoomEncryptionSalt(null)
+              roomEncryptionSaltRef.current = null
+              roomKeyRef.current = null
+              setRoomKey(null)
+              socket.close()
+            }
+          }
         }
         if (message.type === 'presence') {
           setParticipants(message.participantCount)
@@ -859,6 +1063,20 @@ function App() {
             }, 350)
           }
         }
+        if (message.type === 'error') {
+          setStatus('offline')
+          if (message.code === 'unauthorized') {
+            setRoomLockError(message.reason)
+            setRoomSecret(null)
+            setRoomEncryptionSalt(null)
+            roomEncryptionSaltRef.current = null
+            roomKeyRef.current = null
+            setRoomKey(null)
+            socket.close()
+          } else {
+            setNotice(message.reason)
+          }
+        }
       })
 
       socket.addEventListener('close', () => {
@@ -873,7 +1091,7 @@ function App() {
       window.clearTimeout(reconnect)
       socketRef.current?.close()
     }
-  }, [participantId, role, room])
+  }, [participantId, role, room, roomSecret])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -888,13 +1106,47 @@ function App() {
     return () => window.removeEventListener('scroll', handleScroll)
   })
 
-  const updateSession = (updater: (current: SessionState) => SessionState) => {
-    setSession((current) => {
-      const next = { ...updater(current), lastEditedBy: role, updatedAt: Date.now() }
-      const message: WireMessage = { type: 'sync', state: next, participantId, role }
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
+  const flushPendingSync = async () => {
+    if (syncInFlightRef.current) return
+    const key = roomKeyRef.current
+    const encryptionSalt = roomEncryptionSaltRef.current
+    const socket = socketRef.current
+    if (!key || !encryptionSalt || socket?.readyState !== WebSocket.OPEN) return
+
+    syncInFlightRef.current = true
+    try {
+      while (pendingSyncRef.current) {
+        const nextState = pendingSyncRef.current
+        pendingSyncRef.current = null
+        const encrypted = await encryptSessionState(nextState, key, encryptionSalt)
+        if (socketRef.current?.readyState !== WebSocket.OPEN) return
+        const message: WireMessage = { type: 'sync', state: encrypted, participantId, role }
         socketRef.current.send(JSON.stringify(message))
       }
+    } catch {
+      setNotice('The room update could not be encrypted.')
+    } finally {
+      syncInFlightRef.current = false
+      if (pendingSyncRef.current) {
+        void flushPendingSync()
+      }
+    }
+  }
+
+  const queueSessionSync = (state: SessionState) => {
+    pendingSyncRef.current = state
+    void flushPendingSync()
+  }
+
+  const updateSession = (updater: (current: SessionState) => SessionState) => {
+    if (!roomUnlocked) {
+      setNotice('Unlock the room before editing session content.')
+      return
+    }
+
+    setSession((current) => {
+      const next = { ...updater(current), lastEditedBy: role, updatedAt: Date.now() }
+      queueSessionSync(next)
       return next
     })
   }
@@ -917,7 +1169,7 @@ function App() {
 
   const copyLink = async () => {
     await navigator.clipboard.writeText(shareUrl)
-    setNotice('Session link copied.')
+    setNotice('Session link copied. Share the room passphrase separately.')
   }
 
   const saveSnapshot = () => {
@@ -1024,6 +1276,7 @@ function App() {
             Client
             <input
               value={session.clientName}
+              disabled={!roomUnlocked}
               onChange={(event) =>
                 updateSession((current) => ({ ...current, clientName: event.target.value }))
               }
@@ -1033,6 +1286,7 @@ function App() {
             Counselor
             <input
               value={session.counselorName}
+              disabled={!roomUnlocked}
               onChange={(event) =>
                 updateSession((current) => ({ ...current, counselorName: event.target.value }))
               }
@@ -1042,6 +1296,7 @@ function App() {
             Session intention
             <textarea
               value={session.intention}
+              disabled={!roomUnlocked}
               onChange={(event) =>
                 updateSession((current) => ({ ...current, intention: event.target.value }))
               }
@@ -1069,9 +1324,31 @@ function App() {
         </div>
 
         <div className="collab-box">
+          <form className="room-lock-form" onSubmit={unlockRoom}>
+            <label>
+              Room passphrase
+              <input
+                type="password"
+                value={roomPassphrase}
+                placeholder="Shared outside this app"
+                onChange={(event) => setRoomPassphrase(event.target.value)}
+              />
+            </label>
+            <button type="submit">
+              <Lock aria-hidden="true" />
+              {roomUnlocked ? 'Room unlocked' : 'Unlock room'}
+            </button>
+            {roomLockError ? <p className="room-lock-error">{roomLockError}</p> : null}
+          </form>
           <div className="status-row">
             <span className={`status-dot ${status}`} />
-            <span>{status === 'connected' ? 'Live collaboration' : 'Reconnecting'}</span>
+            <span>
+              {roomSecret
+                ? roomUnlocked
+                  ? 'Encrypted collaboration'
+                  : 'Connecting securely'
+                : 'Locked room'}
+            </span>
           </div>
           <div className="room-row">
             <Link aria-hidden="true" />
@@ -1086,13 +1363,13 @@ function App() {
           </div>
           <div className="meta-row">
             <ShieldCheck aria-hidden="true" />
-            <span>Use with a HIPAA-ready host and BAA before PHI</span>
+            <span>Server stores encrypted room contents only</span>
           </div>
           <button
             className={`follow-toggle ${followMode ? 'selected' : ''}`}
             type="button"
             aria-pressed={followMode}
-            disabled={someoneElseIsFollowing}
+            disabled={!roomUnlocked || someoneElseIsFollowing}
             onClick={() => requestFollowMode(!followMode)}
           >
             <Eye aria-hidden="true" />
@@ -1126,6 +1403,7 @@ function App() {
                 className="takeaway-trigger"
                 type="button"
                 aria-expanded={takeawayOpen}
+                disabled={!roomUnlocked}
                 onClick={() => setTakeawayOpen((open) => !open)}
               >
                 <Save aria-hidden="true" />
@@ -1156,7 +1434,7 @@ function App() {
                       <FileJson aria-hidden="true" />
                       Session
                     </button>
-                    <button type="button" onClick={() => fileInputRef.current?.click()}>
+                   <button type="button" onClick={() => fileInputRef.current?.click()}>
                       <Upload aria-hidden="true" />
                       Import
                     </button>
@@ -1220,12 +1498,15 @@ function App() {
                 value={field.value}
                 placeholder={field.placeholder}
                 onFocus={() =>
-                  sendFollowEvent({
-                    kind: 'field',
-                    worksheetId: activeWorksheet.id,
-                    fieldId: field.id,
-                  })
+                  roomUnlocked
+                    ? sendFollowEvent({
+                        kind: 'field',
+                        worksheetId: activeWorksheet.id,
+                        fieldId: field.id,
+                      })
+                    : undefined
                 }
+                disabled={!roomUnlocked}
                 onChange={(event) => updateWorksheetField(field.id, event.target.value)}
               />
             </article>
@@ -1240,6 +1521,7 @@ function App() {
           <textarea
             value={session.sessionNotes}
             placeholder="Track homework, resonant language, consent notes, or follow-up items."
+            disabled={!roomUnlocked}
             onChange={(event) =>
               updateSession((current) => ({ ...current, sessionNotes: event.target.value }))
             }
