@@ -99,6 +99,8 @@ type WireMessage =
   | { type: 'follow'; event: FollowEvent; participantId: string; role: Role }
   | { type: 'follow-control'; enabled: boolean; participantId: string; role: Role }
   | { type: 'follow-state'; accepted: boolean; followerId: string | null }
+  | { type: 'delete-room'; participantId: string; role: Role }
+  | { type: 'room-deleted' }
   | { type: 'error'; code: string; reason: string }
 
 const templates: Worksheet[] = [
@@ -1077,6 +1079,17 @@ function App() {
             setNotice(message.reason)
           }
         }
+        if (message.type === 'room-deleted') {
+          setStatus('offline')
+          setRoomSecret(null)
+          setRoomEncryptionSalt(null)
+          roomEncryptionSaltRef.current = null
+          roomKeyRef.current = null
+          setRoomKey(null)
+          setParticipants(1)
+          setTakeawayOpen(false)
+          setNotice('Deleted the encrypted room data from the server.')
+        }
       })
 
       socket.addEventListener('close', () => {
@@ -1246,6 +1259,15 @@ function App() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
+  }
+
+  const deleteRoom = () => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      setNotice('Unlock the room before deleting server data.')
+      return
+    }
+    const message: WireMessage = { type: 'delete-room', participantId, role }
+    socketRef.current.send(JSON.stringify(message))
   }
 
   const completedFields = session.worksheets.reduce(
@@ -1434,9 +1456,13 @@ function App() {
                       <FileJson aria-hidden="true" />
                       Session
                     </button>
-                   <button type="button" onClick={() => fileInputRef.current?.click()}>
+                    <button type="button" onClick={() => fileInputRef.current?.click()}>
                       <Upload aria-hidden="true" />
                       Import
+                    </button>
+                    <button type="button" onClick={deleteRoom}>
+                      <Lock aria-hidden="true" />
+                      Delete room
                     </button>
                     <button type="button" onClick={() => window.print()}>
                       <Download aria-hidden="true" />

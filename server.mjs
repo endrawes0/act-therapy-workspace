@@ -1,11 +1,12 @@
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createServer } from 'node:http'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const dayMs = 24 * 60 * 60 * 1000
 
 export const safeRoomId = (roomId) => String(roomId ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
 export const isEncryptedState = (state) =>
@@ -29,8 +30,14 @@ const isRoomRecord = (record) =>
       typeof record.verifierSalt === 'string' &&
       typeof record.verifierHash === 'string' &&
       typeof record.encryptionSalt === 'string' &&
+      (typeof record.updatedAt === 'string' || typeof record.updatedAt === 'undefined') &&
       (record.state === null || isEncryptedState(record.state)),
   )
+
+const getRetentionMs = () => {
+  const days = Number(process.env.ACT_SESSION_RETENTION_DAYS ?? 30)
+  return Number.isFinite(days) && days > 0 ? days * dayMs : null
+}
 
 const send = (client, payload) => {
   if (client.readyState === client.OPEN) {
@@ -41,40 +48,105 @@ const send = (client, payload) => {
 export const createCollaborationServer = ({
   distDir = path.join(__dirname, 'dist'),
   sessionDir = path.join(__dirname, 'data', 'sessions'),
+  allowFileStorage = process.env.NODE_ENV !== 'production' ||
+    process.env.ACT_ENABLE_DEMO_FILE_STORAGE === 'true',
+  retentionMs = getRetentionMs(),
+  storageAdapter = null,
 } = {}) => {
   const app = express()
   const server = createServer(app)
   const rooms = new Map()
   const roomCreationLocks = new Map()
+  const roomStorageQueue = new Map()
+  const deletedRooms = new Set()
 
   const getSessionPath = (roomId) => path.join(sessionDir, `${safeRoomId(roomId)}.json`)
 
-  const loadPersistedRoom = async (roomId) => {
+  const isExpired = (record) =>
+    Boolean(
+      retentionMs &&
+        typeof record.updatedAt === 'string' &&
+        Date.now() - new Date(record.updatedAt).getTime() > retentionMs,
+    )
+
+  const deletePersistedRoom = async (roomId) => {
+    if (!allowFileStorage) return
+    if (storageAdapter?.delete) {
+      await storageAdapter.delete(roomId)
+      return
+    }
     try {
-      const record = JSON.parse(await readFile(getSessionPath(roomId), 'utf8'))
-      return isRoomRecord(record) ? record : null
+      await unlink(getSessionPath(roomId))
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+
+  const loadPersistedRoom = async (roomId) => {
+    if (!allowFileStorage) return null
+    try {
+      const record = storageAdapter?.read
+        ? await storageAdapter.read(roomId)
+        : JSON.parse(await readFile(getSessionPath(roomId), 'utf8'))
+      if (!isRoomRecord(record)) {
+        await deletePersistedRoom(roomId)
+        return null
+      }
+      if (isExpired(record)) {
+        await deletePersistedRoom(roomId)
+        return null
+      }
+      return record
     } catch {
       return null
     }
   }
 
   const persistRoom = async (roomId, room) => {
+    if (!allowFileStorage) return
+    if (deletedRooms.has(roomId)) return
+    const record = {
+      version: 2,
+      verifierSalt: room.verifierSalt,
+      verifierHash: room.verifierHash,
+      encryptionSalt: room.encryptionSalt,
+      updatedAt: room.updatedAt,
+      state: room.state,
+    }
+    if (storageAdapter?.write) {
+      await storageAdapter.write(roomId, record)
+      return
+    }
     await mkdir(sessionDir, { recursive: true })
     await writeFile(
       getSessionPath(roomId),
-      JSON.stringify(
-        {
-          version: 2,
-          verifierSalt: room.verifierSalt,
-          verifierHash: room.verifierHash,
-          encryptionSalt: room.encryptionSalt,
-          state: room.state,
-        },
-        null,
-        2,
-      ),
+      JSON.stringify(record, null, 2),
     )
   }
+
+  const queueStorageOperation = (roomId, operation) => {
+    const previous = roomStorageQueue.get(roomId) ?? Promise.resolve()
+    const next = previous.then(operation, operation)
+    roomStorageQueue.set(
+      roomId,
+      next.finally(() => {
+        if (roomStorageQueue.get(roomId) === next) {
+          roomStorageQueue.delete(roomId)
+        }
+      }),
+    )
+    return next
+  }
+
+  const queuePersistRoom = (roomId, room) =>
+    queueStorageOperation(roomId, async () => {
+      await persistRoom(roomId, room)
+    })
+
+  const queueDeleteRoom = (roomId) =>
+    queueStorageOperation(roomId, async () => {
+      await deletePersistedRoom(roomId)
+    })
 
   const getRoom = async (roomId) => {
     if (!rooms.has(roomId)) {
@@ -90,17 +162,19 @@ export const createCollaborationServer = ({
   }
 
   const createRoom = async (roomId, message) => {
+    deletedRooms.delete(roomId)
     const room = {
       version: 2,
       verifierSalt: message.verifierSalt,
       verifierHash: message.verifierHash,
       encryptionSalt: message.encryptionSalt,
+      updatedAt: new Date().toISOString(),
       state: isEncryptedState(message.state) ? message.state : null,
       clients: new Set(),
       followerId: null,
     }
     rooms.set(roomId, room)
-    await persistRoom(roomId, room)
+    await queuePersistRoom(roomId, room)
     return room
   }
 
@@ -249,13 +323,14 @@ export const createCollaborationServer = ({
 
       if (message.type === 'sync') {
         const room = rooms.get(currentRoomId)
-        if (!room || !isEncryptedState(message.state)) {
+        if (!room || deletedRooms.has(currentRoomId) || !isEncryptedState(message.state)) {
           reject('bad-state', 'Only encrypted room state can be synced.')
           return
         }
 
         room.state = message.state
-        persistRoom(currentRoomId, room).catch((error) => {
+        room.updatedAt = new Date().toISOString()
+        queuePersistRoom(currentRoomId, { ...room }).catch((error) => {
           console.error(`Failed to save room ${currentRoomId}:`, error)
         })
         room.clients.forEach((client) => {
@@ -267,6 +342,19 @@ export const createCollaborationServer = ({
               followerId: room.followerId,
             })
           }
+        })
+        return
+      }
+
+      if (message.type === 'delete-room') {
+        const room = rooms.get(currentRoomId)
+        if (!room) return
+        deletedRooms.add(currentRoomId)
+        await queueDeleteRoom(currentRoomId)
+        rooms.delete(currentRoomId)
+        room.clients.forEach((client) => {
+          send(client, { type: 'room-deleted' })
+          client.close(1000, 'Room deleted')
         })
         return
       }
@@ -298,7 +386,37 @@ export const createCollaborationServer = ({
     })
   })
 
-  return { app, server, wss, rooms }
+  const cleanupExpiredRooms = async () => {
+    if (!allowFileStorage || !retentionMs) return
+    try {
+      const entries = await readdir(sessionDir)
+      await Promise.all(
+        entries
+          .filter((entry) => entry.endsWith('.json'))
+          .map(async (entry) => {
+            const roomId = entry.slice(0, -'.json'.length)
+            let record
+            try {
+              record = JSON.parse(await readFile(getSessionPath(roomId), 'utf8'))
+            } catch {
+              await deletePersistedRoom(roomId)
+              return
+            }
+            if (!isRoomRecord(record) || isExpired(record)) {
+              await deletePersistedRoom(roomId)
+            }
+          }),
+      )
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+
+  void cleanupExpiredRooms().catch((error) => {
+    console.error('Failed to clean expired session rooms:', error)
+  })
+
+  return { app, server, wss, rooms, deletingRooms: deletedRooms, cleanupExpiredRooms }
 }
 
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url)
