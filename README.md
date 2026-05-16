@@ -8,6 +8,8 @@ with live room-based editing over WebSockets.
 
 [Open the public Render demo](https://act-therapy-workspace-demo.onrender.com).
 
+![ACT Therapy Workspace demo screenshot](public/demo-screenshot.png)
+
 ## Disclosure
 
 This application was coded with assistance from OpenAI Codex. It is provided as
