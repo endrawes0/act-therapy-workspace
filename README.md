@@ -38,8 +38,10 @@ session room.
 ## Collaboration
 
 Worksheet content syncs live for everyone in the same room. `Follow` mode is
-off by default; when a participant turns it on, their view follows another
-participant's focus changes, worksheet field focus, and scroll position.
+off by default and only one participant can follow at a time. When a participant
+turns it on, their view follows another participant's focus changes, worksheet
+field focus, and scroll position; the followed field is highlighted in the
+follower's view.
 
 ## Deployment
 

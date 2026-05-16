@@ -71,11 +71,19 @@ type FollowEvent =
   | { kind: 'scroll'; y: number }
 
 type WireMessage =
-  | { type: 'join'; room: string; participantId: string; role: Role; state: SessionState }
-  | { type: 'state'; state: SessionState; participantCount: number }
-  | { type: 'presence'; participantCount: number }
+  | {
+      type: 'join'
+      room: string
+      participantId: string
+      role: Role
+      state: SessionState
+    }
+  | { type: 'state'; state: SessionState; participantCount: number; followerId?: string | null }
+  | { type: 'presence'; participantCount: number; followerId?: string | null }
   | { type: 'sync'; state: SessionState; participantId: string; role: Role }
   | { type: 'follow'; event: FollowEvent; participantId: string; role: Role }
+  | { type: 'follow-control'; enabled: boolean; participantId: string; role: Role }
+  | { type: 'follow-state'; accepted: boolean; followerId: string | null }
 
 const templates: Worksheet[] = [
   {
@@ -741,6 +749,8 @@ function App() {
   const [notice, setNotice] = useState('Session autosaves in this browser and on the room server.')
   const [takeawayOpen, setTakeawayOpen] = useState(false)
   const [followMode, setFollowMode] = useState(false)
+  const [roomFollowerId, setRoomFollowerId] = useState<string | null>(null)
+  const [followedFieldId, setFollowedFieldId] = useState<string | null>(null)
   const [activeWorksheetId, setActiveWorksheetId] = useState(session.activeWorksheetId)
   const socketRef = useRef<WebSocket | null>(null)
   const sessionRef = useRef(session)
@@ -752,6 +762,7 @@ function App() {
     session.worksheets.find((worksheet) => worksheet.id === activeWorksheetId) ??
     session.worksheets[0]
   const shareUrl = `${window.location.origin}${window.location.pathname}?room=${room}`
+  const someoneElseIsFollowing = Boolean(roomFollowerId && roomFollowerId !== participantId)
 
   useEffect(() => {
     sessionRef.current = session
@@ -762,6 +773,17 @@ function App() {
     const message: WireMessage = { type: 'follow', event, participantId, role }
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(message))
+    }
+  }
+
+  const requestFollowMode = (enabled: boolean) => {
+    const message: WireMessage = { type: 'follow-control', enabled, participantId, role }
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message))
+    }
+    if (!enabled) {
+      setFollowMode(false)
+      setFollowedFieldId(null)
     }
   }
 
@@ -786,8 +808,23 @@ function App() {
         if (message.type === 'state') {
           setSession(normalizeSession(message.state))
           setParticipants(message.participantCount)
+          setRoomFollowerId(message.followerId ?? null)
         }
-        if (message.type === 'presence') setParticipants(message.participantCount)
+        if (message.type === 'presence') {
+          setParticipants(message.participantCount)
+          setRoomFollowerId(message.followerId ?? null)
+          if (message.followerId !== participantId) {
+            setFollowMode(false)
+          }
+        }
+        if (message.type === 'follow-state') {
+          setRoomFollowerId(message.followerId)
+          const acceptedForMe = message.accepted && message.followerId === participantId
+          setFollowMode(acceptedForMe)
+          if (!acceptedForMe) {
+            setFollowedFieldId(null)
+          }
+        }
         if (
           message.type === 'follow' &&
           followMode &&
@@ -795,15 +832,16 @@ function App() {
         ) {
           if (message.event.kind === 'worksheet') {
             setActiveWorksheetId(message.event.worksheetId)
+            setFollowedFieldId(null)
           }
           if (message.event.kind === 'field') {
             const event = message.event
             setActiveWorksheetId(event.worksheetId)
+            setFollowedFieldId(event.fieldId)
             window.setTimeout(() => {
               const target = document.querySelector<HTMLElement>(
                 `[data-follow-field="${event.fieldId}"]`,
               )
-              target?.focus()
               target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
             }, 80)
           }
@@ -1048,10 +1086,11 @@ function App() {
             className={`follow-toggle ${followMode ? 'selected' : ''}`}
             type="button"
             aria-pressed={followMode}
-            onClick={() => setFollowMode((enabled) => !enabled)}
+            disabled={someoneElseIsFollowing}
+            onClick={() => requestFollowMode(!followMode)}
           >
             <Eye aria-hidden="true" />
-            Follow {followMode ? 'on' : 'off'}
+            {someoneElseIsFollowing ? 'Following in use' : `Follow ${followMode ? 'on' : 'off'}`}
           </button>
         </div>
 
@@ -1162,7 +1201,10 @@ function App() {
           aria-label={`${activeWorksheet.name} worksheet`}
         >
           {activeWorksheet.sections.map((field) => (
-            <article className="prompt-card" key={field.id}>
+            <article
+              className={`prompt-card ${followedFieldId === field.id ? 'follow-highlight' : ''}`}
+              key={field.id}
+            >
               <div>
                 <p className="eyebrow">{field.label}</p>
                 <h3>{field.prompt}</h3>

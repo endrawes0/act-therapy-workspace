@@ -259,6 +259,12 @@ button.selected,
   background: #eef7ef;
 }
 
+.follow-toggle:disabled {
+  cursor: not-allowed;
+  color: #7b837f;
+  background: #efede6;
+}
+
 .workspace {
   min-width: 0;
   padding: 26px;
@@ -384,6 +390,16 @@ button.selected,
 .prompt-card textarea {
   flex: 1;
   min-height: 320px;
+}
+
+.prompt-card.follow-highlight {
+  border-color: #2f6157;
+  box-shadow: 0 0 0 4px rgba(47, 97, 87, 0.18);
+}
+
+.prompt-card.follow-highlight textarea {
+  border-color: #2f6157;
+  background: #f6fbf7;
 }
 
 .rail-heading {

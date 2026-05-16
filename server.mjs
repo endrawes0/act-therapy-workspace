@@ -40,6 +40,7 @@ const getRoom = async (roomId, initialState) => {
     rooms.set(roomId, {
       state: persistedState ?? initialState,
       clients: new Set(),
+      followerId: null,
     })
   }
   return rooms.get(roomId)
@@ -52,12 +53,17 @@ const send = (client, payload) => {
 }
 
 const broadcastPresence = (room) => {
-  const payload = { type: 'presence', participantCount: room.clients.size }
+  const payload = {
+    type: 'presence',
+    participantCount: room.clients.size,
+    followerId: room.followerId,
+  }
   room.clients.forEach((client) => send(client, payload))
 }
 
 wss.on('connection', (socket) => {
   let currentRoomId = null
+  let currentParticipantId = null
 
   socket.on('message', async (raw) => {
     let message
@@ -69,12 +75,43 @@ wss.on('connection', (socket) => {
 
     if (message.type === 'join') {
       currentRoomId = message.room
+      currentParticipantId = message.participantId
       const room = await getRoom(message.room, message.state)
       room.clients.add(socket)
       send(socket, {
         type: 'state',
         state: room.state,
         participantCount: room.clients.size,
+        followerId: room.followerId,
+      })
+      broadcastPresence(room)
+      return
+    }
+
+    if (message.type === 'follow-control' && currentRoomId) {
+      const room = rooms.get(currentRoomId)
+      if (!room) return
+
+      if (message.enabled) {
+        if (room.followerId && room.followerId !== message.participantId) {
+          send(socket, {
+            type: 'follow-state',
+            accepted: false,
+            followerId: room.followerId,
+          })
+          return
+        }
+        room.followerId = message.participantId
+      } else if (room.followerId === message.participantId) {
+        room.followerId = null
+      }
+
+      room.clients.forEach((client) => {
+        send(client, {
+          type: 'follow-state',
+          accepted: true,
+          followerId: room.followerId,
+        })
       })
       broadcastPresence(room)
       return
@@ -115,6 +152,9 @@ wss.on('connection', (socket) => {
     const room = rooms.get(currentRoomId)
     if (!room) return
     room.clients.delete(socket)
+    if (room.followerId === currentParticipantId) {
+      room.followerId = null
+    }
     if (room.clients.size === 0) {
       rooms.delete(currentRoomId)
     } else {
