@@ -98,12 +98,27 @@ days. Expired rooms are removed on startup/load. Users can also delete an
 unlocked room from the save panel; deletion removes the encrypted room blob and
 associated room metadata from the configured storage.
 
+### Browser Local Data
+
+The app does not automatically persist full session content to `localStorage`.
+Browser restore points are created only when a user chooses `Save` in the save
+panel for an unlocked room. Those restore points are plaintext in the current
+browser profile so they can be restored later, and they may remain on shared
+machines, synced browser profiles, local backups, or any environment where
+scripts on this origin can read `localStorage`.
+
+Use `Clear local` in the save panel to remove the current room's browser restore
+point. Restoring a browser save is available only after the room is unlocked
+with the room passphrase, so local data cannot be synced into a room without
+authorization.
+
 ## Client Take-Away
 
 Use the save panel in the app to:
 
-- save a browser restore point for the current room
+- explicitly save a browser restore point for the current room
 - restore the current browser's saved room state
+- clear the current room's browser restore point
 - export a Markdown session summary for the client
 - export a worksheet-specific SVG visual reference for the active focus
 - export a JSON session file that can be imported later
