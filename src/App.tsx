@@ -20,6 +20,7 @@ import {
   Save,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
   Users,
 } from 'lucide-react'
@@ -865,8 +866,13 @@ function App() {
   const [roomKey, setRoomKey] = useState<CryptoKey | null>(null)
   const [roomLockError, setRoomLockError] = useState('')
   const [participants, setParticipants] = useState(1)
-  const [notice, setNotice] = useState('Session autosaves locally and syncs as encrypted room data.')
+  const [notice, setNotice] = useState('Session syncs as encrypted room data. Browser restore points are optional.')
   const [takeawayOpen, setTakeawayOpen] = useState(false)
+  const [browserSaveLabel, setBrowserSaveLabel] = useState(() =>
+    localStorage.getItem(getSavedSessionKey(room))
+      ? 'Browser restore point saved'
+      : 'No browser restore point',
+  )
   const [followMode, setFollowMode] = useState(false)
   const [roomFollowerId, setRoomFollowerId] = useState<string | null>(null)
   const [followedFieldId, setFollowedFieldId] = useState<string | null>(null)
@@ -891,8 +897,7 @@ function App() {
 
   useEffect(() => {
     sessionRef.current = session
-    localStorage.setItem(getSavedSessionKey(room), JSON.stringify(session))
-  }, [room, session])
+  }, [session])
 
   useEffect(() => {
     roomEncryptionSaltRef.current = roomEncryptionSalt
@@ -1186,11 +1191,20 @@ function App() {
   }
 
   const saveSnapshot = () => {
-    updateSession((current) => current)
-    setNotice('Saved a browser restore point for this room.')
+    if (!roomUnlocked) {
+      setNotice('Unlock the room before saving browser restore data.')
+      return
+    }
+    localStorage.setItem(getSavedSessionKey(room), JSON.stringify(sessionRef.current))
+    setBrowserSaveLabel(`Browser restore: ${new Date().toLocaleTimeString()}`)
+    setNotice('Saved an explicit browser restore point for this room.')
   }
 
   const restoreSnapshot = () => {
+    if (!roomUnlocked) {
+      setNotice('Unlock the room before restoring browser data.')
+      return
+    }
     const saved = localStorage.getItem(getSavedSessionKey(room))
     if (!saved) {
       setNotice('No browser restore point exists for this room yet.')
@@ -1209,6 +1223,12 @@ function App() {
     } catch {
       setNotice('The saved restore point could not be read.')
     }
+  }
+
+  const clearSnapshot = () => {
+    localStorage.removeItem(getSavedSessionKey(room))
+    setBrowserSaveLabel('No browser restore point')
+    setNotice('Cleared this room\'s browser restore point.')
   }
 
   const exportJson = () => {
@@ -1436,31 +1456,39 @@ function App() {
                 <div className="takeaway-panel">
                   <p>{notice}</p>
                   <div className="continuity-grid">
-                    <button type="button" onClick={saveSnapshot}>
+                    <button type="button" disabled={!roomUnlocked} onClick={saveSnapshot}>
                       <Save aria-hidden="true" />
                       Save
                     </button>
-                    <button type="button" onClick={restoreSnapshot}>
+                    <button type="button" disabled={!roomUnlocked} onClick={restoreSnapshot}>
                       <FolderOpen aria-hidden="true" />
                       Restore
                     </button>
-                    <button type="button" onClick={exportMarkdown}>
+                    <button type="button" onClick={clearSnapshot}>
+                      <Trash2 aria-hidden="true" />
+                      Clear local
+                    </button>
+                    <button type="button" disabled={!roomUnlocked} onClick={exportMarkdown}>
                       <FileText aria-hidden="true" />
                       Summary
                     </button>
-                    <button type="button" onClick={exportFocusVisual}>
+                    <button type="button" disabled={!roomUnlocked} onClick={exportFocusVisual}>
                       <ImageDown aria-hidden="true" />
                       Visual
                     </button>
-                    <button type="button" onClick={exportJson}>
+                    <button type="button" disabled={!roomUnlocked} onClick={exportJson}>
                       <FileJson aria-hidden="true" />
                       Session
                     </button>
-                    <button type="button" onClick={() => fileInputRef.current?.click()}>
+                    <button
+                      type="button"
+                      disabled={!roomUnlocked}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
                       <Upload aria-hidden="true" />
                       Import
                     </button>
-                    <button type="button" onClick={deleteRoom}>
+                    <button type="button" disabled={!roomUnlocked} onClick={deleteRoom}>
                       <Lock aria-hidden="true" />
                       Delete room
                     </button>
@@ -1470,7 +1498,7 @@ function App() {
                     </button>
                   </div>
                   <span className="saved-stamp">
-                    Browser save: {new Date(session.updatedAt).toLocaleTimeString()}
+                    {browserSaveLabel}
                   </span>
                 </div>
               ) : null}
