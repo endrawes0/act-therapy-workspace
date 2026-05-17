@@ -416,6 +416,8 @@ const getSocketUrl = () => {
 
 const getSavedSessionKey = (room: string) => `act-session:${room}`
 const roomKdfIterations = 210000
+const syncDebounceMs = 500
+const syncRateLimitRetryMs = 2000
 
 const bytesToBase64 = (bytes: Uint8Array) => {
   let binary = ''
@@ -887,6 +889,9 @@ function App() {
   const lastScrollEventRef = useRef(0)
   const syncInFlightRef = useRef(false)
   const pendingSyncRef = useRef<SessionState | null>(null)
+  const lastSentSyncRef = useRef<SessionState | null>(null)
+  const syncRetryTimerRef = useRef<number | undefined>(undefined)
+  const flushPendingSyncRef = useRef<() => void>(() => undefined)
   const participantId = useMemo(() => crypto.randomUUID(), [])
   const activeWorksheet =
     session.worksheets.find((worksheet) => worksheet.id === activeWorksheetId) ??
@@ -942,6 +947,49 @@ function App() {
       setFollowedFieldId(null)
     }
   }
+
+  async function flushPendingSync() {
+    if (syncInFlightRef.current) return
+    const key = roomKeyRef.current
+    const encryptionSalt = roomEncryptionSaltRef.current
+    const socket = socketRef.current
+    if (!key || !encryptionSalt || socket?.readyState !== WebSocket.OPEN) return
+
+    syncInFlightRef.current = true
+    try {
+      const nextState = pendingSyncRef.current
+      if (!nextState) return
+      pendingSyncRef.current = null
+      const encrypted = await encryptSessionState(nextState, key, encryptionSalt)
+      if (socketRef.current?.readyState !== WebSocket.OPEN) return
+      lastSentSyncRef.current = nextState
+      const message: WireMessage = { type: 'sync', state: encrypted, participantId, role }
+      socketRef.current.send(JSON.stringify(message))
+    } catch {
+      setNotice('The room update could not be encrypted.')
+    } finally {
+      syncInFlightRef.current = false
+      if (pendingSyncRef.current) {
+        window.clearTimeout(syncRetryTimerRef.current)
+        syncRetryTimerRef.current = window.setTimeout(() => {
+          void flushPendingSync()
+        }, syncDebounceMs)
+      }
+    }
+  }
+
+  function schedulePendingSync(delay = syncDebounceMs) {
+    window.clearTimeout(syncRetryTimerRef.current)
+    syncRetryTimerRef.current = window.setTimeout(() => {
+      void flushPendingSync()
+    }, delay)
+  }
+
+  useEffect(() => {
+    flushPendingSyncRef.current = () => {
+      void flushPendingSync()
+    }
+  })
 
   useEffect(() => {
     let reconnect: number | undefined
@@ -1071,8 +1119,8 @@ function App() {
           }
         }
         if (message.type === 'error') {
-          setStatus('offline')
           if (message.code === 'unauthorized') {
+            setStatus('offline')
             setRoomLockError(message.reason)
             setRoomSecret(null)
             setRoomEncryptionSalt(null)
@@ -1080,7 +1128,15 @@ function App() {
             roomKeyRef.current = null
             setRoomKey(null)
             socket.close()
+          } else if (message.code === 'rate-limited') {
+            pendingSyncRef.current = pendingSyncRef.current ?? lastSentSyncRef.current
+            window.clearTimeout(syncRetryTimerRef.current)
+            syncRetryTimerRef.current = window.setTimeout(() => {
+              flushPendingSyncRef.current()
+            }, syncRateLimitRetryMs)
+            setNotice('Sync paused briefly to avoid flooding the room.')
           } else {
+            setStatus('offline')
             setNotice(message.reason)
           }
         }
@@ -1107,6 +1163,7 @@ function App() {
     return () => {
       closedByEffect = true
       window.clearTimeout(reconnect)
+      window.clearTimeout(syncRetryTimerRef.current)
       socketRef.current?.close()
     }
   }, [participantId, role, room, roomSecret])
@@ -1124,36 +1181,9 @@ function App() {
     return () => window.removeEventListener('scroll', handleScroll)
   })
 
-  const flushPendingSync = async () => {
-    if (syncInFlightRef.current) return
-    const key = roomKeyRef.current
-    const encryptionSalt = roomEncryptionSaltRef.current
-    const socket = socketRef.current
-    if (!key || !encryptionSalt || socket?.readyState !== WebSocket.OPEN) return
-
-    syncInFlightRef.current = true
-    try {
-      while (pendingSyncRef.current) {
-        const nextState = pendingSyncRef.current
-        pendingSyncRef.current = null
-        const encrypted = await encryptSessionState(nextState, key, encryptionSalt)
-        if (socketRef.current?.readyState !== WebSocket.OPEN) return
-        const message: WireMessage = { type: 'sync', state: encrypted, participantId, role }
-        socketRef.current.send(JSON.stringify(message))
-      }
-    } catch {
-      setNotice('The room update could not be encrypted.')
-    } finally {
-      syncInFlightRef.current = false
-      if (pendingSyncRef.current) {
-        void flushPendingSync()
-      }
-    }
-  }
-
   const queueSessionSync = (state: SessionState) => {
     pendingSyncRef.current = state
-    void flushPendingSync()
+    schedulePendingSync()
   }
 
   const updateSession = (updater: (current: SessionState) => SessionState) => {

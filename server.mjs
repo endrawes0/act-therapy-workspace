@@ -7,20 +7,85 @@ import path from 'node:path'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dayMs = 24 * 60 * 60 * 1000
+const expectedKdfIterations = 210000
+const maxWebSocketPayloadBytes = 1024 * 1024
+const maxCiphertextBytes = 512 * 1024
+const maxRoomIdLength = 80
+const maxParticipantIdLength = 80
+const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/
 
-export const safeRoomId = (roomId) => String(roomId ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
+const isPlainObject = (value) =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value))
+
+const isBoundedString = (value, maxLength, pattern = null) =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value.length <= maxLength &&
+  (!pattern || pattern.test(value))
+
+const isBase64Bytes = (value, expectedLength = null, maxLength = null) => {
+  const encodedLimit =
+    expectedLength !== null
+      ? Math.ceil(expectedLength / 3) * 4
+      : maxLength !== null
+        ? Math.ceil(maxLength / 3) * 4
+        : 1024
+  if (!isBoundedString(value, encodedLimit, base64Pattern)) return false
+  try {
+    const decoded = Buffer.from(value, 'base64')
+    return (
+      decoded.length > 0 &&
+      Buffer.from(decoded).toString('base64') === value &&
+      (expectedLength === null || decoded.length === expectedLength) &&
+      (maxLength === null || decoded.length <= maxLength)
+    )
+  } catch {
+    return false
+  }
+}
+
+export const safeRoomId = (roomId) => String(roomId ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, maxRoomIdLength)
 export const isEncryptedState = (state) =>
   Boolean(
-    state &&
-      typeof state === 'object' &&
+    isPlainObject(state) &&
       state.version === 1 &&
       state.algorithm === 'AES-GCM' &&
       state.kdf === 'PBKDF2-SHA-256' &&
-      typeof state.iterations === 'number' &&
-      typeof state.salt === 'string' &&
-      typeof state.iv === 'string' &&
-      typeof state.ciphertext === 'string',
+      state.iterations === expectedKdfIterations &&
+      isBase64Bytes(state.salt, 16) &&
+      isBase64Bytes(state.iv, 12) &&
+      isBase64Bytes(state.ciphertext, null, maxCiphertextBytes),
   )
+
+const isRoomId = (value) =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value.length <= maxRoomIdLength &&
+  safeRoomId(value) === value
+
+const isParticipantId = (value) =>
+  isBoundedString(value, maxParticipantIdLength, /^[a-zA-Z0-9_-]+$/)
+
+const isRole = (value) => value === 'client' || value === 'counselor'
+const isVerifier = (value) => isBase64Bytes(value, 32)
+const isSalt = (value) => isBase64Bytes(value, 16)
+
+const isFollowEvent = (event) => {
+  if (!isPlainObject(event)) return false
+  if (event.kind === 'worksheet') {
+    return isBoundedString(event.worksheetId, 80, /^[a-zA-Z0-9_-]+$/)
+  }
+  if (event.kind === 'field') {
+    return (
+      isBoundedString(event.worksheetId, 80, /^[a-zA-Z0-9_-]+$/) &&
+      isBoundedString(event.fieldId, 80, /^[a-zA-Z0-9_-]+$/)
+    )
+  }
+  if (event.kind === 'scroll') {
+    return typeof event.y === 'number' && Number.isFinite(event.y) && event.y >= 0 && event.y <= 200000
+  }
+  return false
+}
 
 const isRoomRecord = (record) =>
   Boolean(
@@ -52,6 +117,13 @@ export const createCollaborationServer = ({
     process.env.ACT_ENABLE_DEMO_FILE_STORAGE === 'true',
   retentionMs = getRetentionMs(),
   storageAdapter = null,
+  maxPayloadBytes = maxWebSocketPayloadBytes,
+  rateLimits = {
+    'room-info': { limit: 20, windowMs: 60_000 },
+    sync: { limit: 30, windowMs: 10_000 },
+    follow: { limit: 60, windowMs: 10_000 },
+    'follow-control': { limit: 20, windowMs: 10_000 },
+  },
 } = {}) => {
   const app = express()
   const server = createServer(app)
@@ -209,17 +281,37 @@ export const createCollaborationServer = ({
     response.sendFile(path.join(distDir, 'index.html'))
   })
 
-  const wss = new WebSocketServer({ server, path: '/collaboration' })
+  const wss = new WebSocketServer({ server, path: '/collaboration', maxPayload: maxPayloadBytes })
 
   wss.on('connection', (socket) => {
     let currentRoomId = null
     let currentParticipantId = null
+    let currentRole = null
+    const rateBuckets = new Map()
 
     const reject = (code, reason) => {
       send(socket, { type: 'error', code, reason })
     }
 
+    const isRateLimited = (type) => {
+      const config = rateLimits[type]
+      if (!config) return false
+      const now = Date.now()
+      const bucket = rateBuckets.get(type)
+      if (!bucket || now - bucket.startedAt >= config.windowMs) {
+        rateBuckets.set(type, { startedAt: now, count: 1 })
+        return false
+      }
+      bucket.count += 1
+      return bucket.count > config.limit
+    }
+
     socket.on('message', async (raw) => {
+      if (raw.length > maxPayloadBytes) {
+        reject('payload-too-large', 'Message payload is too large.')
+        socket.close(1009, 'Message payload is too large.')
+        return
+      }
       let message
       try {
         message = JSON.parse(raw.toString())
@@ -227,13 +319,21 @@ export const createCollaborationServer = ({
         reject('bad-message', 'Message was not valid JSON.')
         return
       }
+      if (!isPlainObject(message) || typeof message.type !== 'string') {
+        reject('bad-message', 'Message shape is invalid.')
+        return
+      }
+      if (isRateLimited(message.type)) {
+        reject('rate-limited', 'Too many messages; slow down.')
+        return
+      }
 
       if (message.type === 'room-info') {
-        const roomId = safeRoomId(message.room)
-        if (!roomId) {
+        if (!isRoomId(message.room)) {
           reject('bad-room', 'Room id is required.')
           return
         }
+        const roomId = message.room
         const room = await getRoom(roomId)
         send(socket, {
           type: 'room-info',
@@ -246,17 +346,22 @@ export const createCollaborationServer = ({
       }
 
       if (message.type === 'join') {
-        const roomId = safeRoomId(message.room)
-        if (!roomId || typeof message.verifierHash !== 'string') {
+        if (
+          !isRoomId(message.room) ||
+          !isParticipantId(message.participantId) ||
+          !isRole(message.role) ||
+          !isVerifier(message.verifierHash)
+        ) {
           reject('unauthorized', 'A room passphrase proof is required.')
           return
         }
+        const roomId = message.room
 
         let room = await getRoom(roomId)
         if (!room) {
           if (
-            typeof message.verifierSalt !== 'string' ||
-            typeof message.encryptionSalt !== 'string' ||
+            !isSalt(message.verifierSalt) ||
+            !isSalt(message.encryptionSalt) ||
             !isEncryptedState(message.state)
           ) {
             reject('unauthorized', 'New rooms require a passphrase proof and encrypted state.')
@@ -276,6 +381,7 @@ export const createCollaborationServer = ({
 
         currentRoomId = roomId
         currentParticipantId = message.participantId
+        currentRole = message.role
         room.clients.add(socket)
         send(socket, {
           type: 'state',
@@ -287,6 +393,11 @@ export const createCollaborationServer = ({
         return
       }
 
+      if (!['follow-control', 'sync', 'delete-room', 'follow'].includes(message.type)) {
+        reject('unknown-message', 'Message type is not supported.')
+        return
+      }
+
       if (!currentRoomId) {
         reject('unauthorized', 'Join the room before sending collaboration messages.')
         return
@@ -295,9 +406,13 @@ export const createCollaborationServer = ({
       if (message.type === 'follow-control') {
         const room = rooms.get(currentRoomId)
         if (!room) return
+        if (typeof message.enabled !== 'boolean') {
+          reject('bad-message', 'Follow control payload is invalid.')
+          return
+        }
 
         if (message.enabled) {
-          if (room.followerId && room.followerId !== message.participantId) {
+          if (room.followerId && room.followerId !== currentParticipantId) {
             send(socket, {
               type: 'follow-state',
               accepted: false,
@@ -305,8 +420,8 @@ export const createCollaborationServer = ({
             })
             return
           }
-          room.followerId = message.participantId
-        } else if (room.followerId === message.participantId) {
+          room.followerId = currentParticipantId
+        } else if (room.followerId === currentParticipantId) {
           room.followerId = null
         }
 
@@ -362,12 +477,24 @@ export const createCollaborationServer = ({
       if (message.type === 'follow') {
         const room = rooms.get(currentRoomId)
         if (!room) return
+        if (!isFollowEvent(message.event)) {
+          reject('bad-message', 'Follow event payload is invalid.')
+          return
+        }
+        const followMessage = {
+          type: 'follow',
+          event: message.event,
+          participantId: currentParticipantId,
+          role: currentRole,
+        }
         room.clients.forEach((client) => {
           if (client !== socket) {
-            send(client, message)
+            send(client, followMessage)
           }
         })
+        return
       }
+
     })
 
     socket.on('close', () => {

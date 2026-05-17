@@ -6,18 +6,25 @@ import { after, before, test } from 'node:test'
 import WebSocket from 'ws'
 import { createCollaborationServer } from './server.mjs'
 
+const fixedBytes = (value, length) => Buffer.from(value.padEnd(length, '.').slice(0, length))
+
 const encryptedState = (label) => ({
   version: 1,
   algorithm: 'AES-GCM',
   kdf: 'PBKDF2-SHA-256',
   iterations: 210000,
-  salt: 'ZW5jcnlwdGlvbi1zYWx0',
-  iv: `aXYt${label}`,
-  ciphertext: `Y2lwaGVydGV4dC0${label}`,
+  salt: fixedBytes(`salt-${label}`, 16).toString('base64'),
+  iv: fixedBytes(`iv-${label}`, 12).toString('base64'),
+  ciphertext: Buffer.from(`ciphertext-${label}`).toString('base64'),
 })
+
+const salt = (label) => fixedBytes(`salt-${label}`, 16).toString('base64')
+const verifier = (label) => fixedBytes(`verifier-${label}`, 32).toString('base64')
+const role = 'counselor'
 
 let tempDir
 let server
+let wss
 let baseUrl
 
 before(async () => {
@@ -28,12 +35,14 @@ before(async () => {
     retentionMs: 24 * 60 * 60 * 1000,
   })
   server = created.server
+  wss = created.wss
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   baseUrl = `ws://127.0.0.1:${address.port}/collaboration`
 })
 
 after(async () => {
+  wss.clients.forEach((socket) => socket.terminate())
   await new Promise((resolve) => server.close(resolve))
   await rm(tempDir, { recursive: true, force: true })
 })
@@ -48,8 +57,16 @@ const openSocket = async (url = baseUrl) => {
 }
 
 const nextMessage = (socket) =>
-  new Promise((resolve) => {
-    socket.once('message', (raw) => resolve(JSON.parse(raw.toString())))
+  new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off('message', onMessage)
+      reject(new Error('Timed out waiting for WebSocket message.'))
+    }, 1000)
+    const onMessage = (raw) => {
+      clearTimeout(timeout)
+      resolve(JSON.parse(raw.toString()))
+    }
+    socket.once('message', onMessage)
   })
 
 const nextMessageOfType = async (socket, type) => {
@@ -64,6 +81,20 @@ const send = (socket, payload) => {
 }
 
 const sessionPath = (room) => path.join(tempDir, 'sessions', `${room}.json`)
+
+const joinRoom = async (socket, room, participantId = 'first', hash = verifier(room)) => {
+  send(socket, {
+    type: 'join',
+    room,
+    participantId,
+    role,
+    verifierSalt: salt(`${room}-verifier`),
+    verifierHash: hash,
+    encryptionSalt: salt(`${room}-enc`),
+    state: encryptedState(room),
+  })
+  return nextMessageOfType(socket, 'state')
+}
 
 const deferred = () => {
   let resolve
@@ -83,10 +114,24 @@ const waitFor = async (predicate) => {
 
 test('missing passphrase proof cannot join a room', async () => {
   const socket = await openSocket()
-  send(socket, { type: 'join', room: 'missing-proof', participantId: 'p1' })
+  send(socket, { type: 'join', room: 'missing-proof', participantId: 'p1', role })
   const message = await nextMessage(socket)
   assert.equal(message.type, 'error')
   assert.equal(message.code, 'unauthorized')
+  socket.close()
+})
+
+test('malformed JSON and unknown message types are rejected', async () => {
+  const socket = await openSocket()
+  socket.send('{not-json')
+  const malformed = await nextMessage(socket)
+  assert.equal(malformed.type, 'error')
+  assert.equal(malformed.code, 'bad-message')
+
+  send(socket, { type: 'bogus-message' })
+  const unknown = await nextMessage(socket)
+  assert.equal(unknown.type, 'error')
+  assert.equal(unknown.code, 'unknown-message')
   socket.close()
 })
 
@@ -96,9 +141,10 @@ test('incorrect passphrase proof cannot join or receive state', async () => {
     type: 'join',
     room: 'wrong-proof',
     participantId: 'creator',
-    verifierSalt: 'salt-1',
-    verifierHash: 'correct-proof',
-    encryptionSalt: 'enc-salt-1',
+    role,
+    verifierSalt: salt('1'),
+    verifierHash: verifier('correct'),
+    encryptionSalt: salt('enc1'),
     state: encryptedState('A'),
   })
   assert.equal((await nextMessage(creator)).type, 'state')
@@ -108,7 +154,8 @@ test('incorrect passphrase proof cannot join or receive state', async () => {
     type: 'join',
     room: 'wrong-proof',
     participantId: 'intruder',
-    verifierHash: 'wrong-proof',
+    role,
+    verifierHash: verifier('wrong'),
   })
   const message = await nextMessage(intruder)
   assert.equal(message.type, 'error')
@@ -126,18 +173,20 @@ test('concurrent first joins cannot overwrite the created room verifier', async 
     type: 'join',
     room: 'creation-race',
     participantId: 'first',
-    verifierSalt: 'race-salt-a',
-    verifierHash: 'race-proof-a',
-    encryptionSalt: 'race-enc-a',
+    role,
+    verifierSalt: salt('race-a'),
+    verifierHash: verifier('race-a'),
+    encryptionSalt: salt('race-enc-a'),
     state: encryptedState('R'),
   })
   send(second, {
     type: 'join',
     room: 'creation-race',
     participantId: 'second',
-    verifierSalt: 'race-salt-b',
-    verifierHash: 'race-proof-b',
-    encryptionSalt: 'race-enc-b',
+    role,
+    verifierSalt: salt('race-b'),
+    verifierHash: verifier('race-b'),
+    encryptionSalt: salt('race-enc-b'),
     state: encryptedState('S'),
   })
 
@@ -162,6 +211,51 @@ test('unauthorized socket cannot sync room ciphertext', async () => {
   socket.close()
 })
 
+test('invalid encrypted state shape is rejected before persistence or broadcast', async () => {
+  const first = await openSocket()
+  const second = await openSocket()
+  await joinRoom(first, 'invalid-state', 'first', verifier('invalid-state'))
+  send(second, {
+    type: 'join',
+    room: 'invalid-state',
+    participantId: 'second',
+    role,
+    verifierHash: verifier('invalid-state'),
+  })
+  await nextMessageOfType(second, 'state')
+
+  send(first, {
+    type: 'sync',
+    participantId: 'first',
+    state: { ...encryptedState('bad'), iv: Buffer.from('too-short').toString('base64') },
+  })
+  const rejected = await nextMessageOfType(first, 'error')
+  assert.equal(rejected.type, 'error')
+  assert.equal(rejected.code, 'bad-state')
+
+  first.close()
+  second.close()
+})
+
+test('oversized encrypted state payload is rejected before persistence or broadcast', async () => {
+  const socket = await openSocket()
+  await joinRoom(socket, 'oversized-state', 'first', verifier('oversized-state'))
+  send(socket, {
+    type: 'sync',
+    participantId: 'first',
+    state: {
+      ...encryptedState('oversized'),
+      ciphertext: Buffer.alloc(600 * 1024, 7).toString('base64'),
+    },
+  })
+  const rejected = await nextMessage(socket)
+  assert.equal(rejected.type, 'error')
+  assert.equal(rejected.code, 'bad-state')
+  const persisted = await readFile(sessionPath('oversized-state'), 'utf8')
+  assert.doesNotMatch(persisted, /BwcHBwcH/)
+  socket.close()
+})
+
 test('authorized sync broadcasts only encrypted room state', async () => {
   const first = await openSocket()
   const second = await openSocket()
@@ -170,9 +264,10 @@ test('authorized sync broadcasts only encrypted room state', async () => {
     type: 'join',
     room: 'authorized-sync',
     participantId: 'first',
-    verifierSalt: 'salt-2',
-    verifierHash: 'shared-proof',
-    encryptionSalt: 'enc-salt-2',
+    role,
+    verifierSalt: salt('2'),
+    verifierHash: verifier('shared'),
+    encryptionSalt: salt('enc2'),
     state: encryptedState('C'),
   })
   assert.equal((await nextMessage(first)).type, 'state')
@@ -181,7 +276,8 @@ test('authorized sync broadcasts only encrypted room state', async () => {
     type: 'join',
     room: 'authorized-sync',
     participantId: 'second',
-    verifierHash: 'shared-proof',
+    role,
+    verifierHash: verifier('shared'),
   })
   const joined = await nextMessageOfType(second, 'state')
   assert.equal(joined.type, 'state')
@@ -201,15 +297,95 @@ test('authorized sync broadcasts only encrypted room state', async () => {
   second.close()
 })
 
+test('post-join participant fields cannot impersonate another socket', async () => {
+  const first = await openSocket()
+  const second = await openSocket()
+  await joinRoom(first, 'impersonation', 'first-id', verifier('impersonation'))
+  send(second, {
+    type: 'join',
+    room: 'impersonation',
+    participantId: 'second-id',
+    role,
+    verifierHash: verifier('impersonation'),
+  })
+  await nextMessageOfType(second, 'state')
+
+  send(first, {
+    type: 'follow',
+    participantId: 'second-id',
+    role: 'client',
+    event: { kind: 'worksheet', worksheetId: 'values-compass' },
+  })
+  const forwarded = await nextMessageOfType(second, 'follow')
+  assert.equal(forwarded.participantId, 'first-id')
+  assert.equal(forwarded.role, role)
+
+  send(first, { type: 'follow-control', enabled: true, participantId: 'second-id', role: 'client' })
+  const accepted = await nextMessageOfType(first, 'follow-state')
+  assert.equal(accepted.followerId, 'first-id')
+
+  first.close()
+  second.close()
+})
+
+test('sync and follow spam are rate limited per connection', async () => {
+  const limitedDir = await mkdtemp(path.join(tmpdir(), 'act-rate-limit-'))
+  const created = createCollaborationServer({
+    distDir: limitedDir,
+    sessionDir: path.join(limitedDir, 'sessions'),
+    rateLimits: {
+      sync: { limit: 1, windowMs: 60_000 },
+      follow: { limit: 1, windowMs: 60_000 },
+      'follow-control': { limit: 1, windowMs: 60_000 },
+    },
+  })
+  await new Promise((resolve) => created.server.listen(0, '127.0.0.1', resolve))
+  const address = created.server.address()
+  const socket = await openSocket(`ws://127.0.0.1:${address.port}/collaboration`)
+  try {
+    await joinRoom(socket, 'rate-limit', 'first', verifier('rate-limit'))
+    send(socket, { type: 'sync', participantId: 'first', state: encryptedState('sync-a') })
+    send(socket, { type: 'sync', participantId: 'first', state: encryptedState('sync-b') })
+    const syncLimit = await nextMessageOfType(socket, 'error')
+    assert.equal(syncLimit.code, 'rate-limited')
+
+    send(socket, {
+      type: 'follow',
+      participantId: 'first',
+      role,
+      event: { kind: 'scroll', y: 10 },
+    })
+    send(socket, {
+      type: 'follow',
+      participantId: 'first',
+      role,
+      event: { kind: 'scroll', y: 20 },
+    })
+    const followLimit = await nextMessageOfType(socket, 'error')
+    assert.equal(followLimit.code, 'rate-limited')
+
+    send(socket, { type: 'follow-control', enabled: true, participantId: 'first', role })
+    await nextMessageOfType(socket, 'follow-state')
+    send(socket, { type: 'follow-control', enabled: false, participantId: 'first', role })
+    const followControlLimit = await nextMessageOfType(socket, 'error')
+    assert.equal(followControlLimit.code, 'rate-limited')
+  } finally {
+    socket.close()
+    await new Promise((resolve) => created.server.close(resolve))
+    await rm(limitedDir, { recursive: true, force: true })
+  }
+})
+
 test('persisted room records contain encrypted state without plaintext session contents', async () => {
   const socket = await openSocket()
   send(socket, {
     type: 'join',
     room: 'encrypted-persist',
     participantId: 'first',
-    verifierSalt: 'persist-salt',
-    verifierHash: 'persist-proof',
-    encryptionSalt: 'persist-enc',
+    role,
+    verifierSalt: salt('persist'),
+    verifierHash: verifier('persist'),
+    encryptionSalt: salt('persist-enc'),
     state: encryptedState('P'),
   })
   assert.equal((await nextMessage(socket)).type, 'state')
@@ -226,9 +402,10 @@ test('delete-room removes the encrypted room blob and metadata', async () => {
     type: 'join',
     room: 'delete-room',
     participantId: 'first',
-    verifierSalt: 'delete-salt',
-    verifierHash: 'delete-proof',
-    encryptionSalt: 'delete-enc',
+    role,
+    verifierSalt: salt('delete'),
+    verifierHash: verifier('delete'),
+    encryptionSalt: salt('delete-enc'),
     state: encryptedState('X'),
   })
   assert.equal((await nextMessage(socket)).type, 'state')
@@ -274,9 +451,10 @@ test('delete-room waits for pending writes and prevents room resurrection', asyn
       type: 'join',
       room: 'delete-race',
       participantId: 'first',
-      verifierSalt: 'delete-race-salt',
-      verifierHash: 'delete-race-proof',
-      encryptionSalt: 'delete-race-enc',
+      role,
+      verifierSalt: salt('delete-race'),
+      verifierHash: verifier('delete-race'),
+      encryptionSalt: salt('delete-race'),
       state: encryptedState('initial'),
     })
     assert.equal((await firstJoin).type, 'state')
@@ -285,7 +463,8 @@ test('delete-room waits for pending writes and prevents room resurrection', asyn
       type: 'join',
       room: 'delete-race',
       participantId: 'second',
-      verifierHash: 'delete-race-proof',
+      role,
+      verifierHash: verifier('delete-race'),
     })
     assert.equal((await secondJoin).type, 'state')
 
@@ -332,8 +511,8 @@ test('expired room records are deleted according to retention settings', async (
     JSON.stringify({
       version: 2,
       verifierSalt: 'expired-salt',
-      verifierHash: 'expired-proof',
-      encryptionSalt: 'expired-enc',
+      verifierHash: verifier('expired'),
+      encryptionSalt: salt('expired'),
       updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       state: encryptedState('E'),
     }),
@@ -390,9 +569,10 @@ test('disabled file storage does not write local session files', async () => {
     type: 'join',
     room: 'memory-only',
     participantId: 'first',
-    verifierSalt: 'memory-salt',
-    verifierHash: 'memory-proof',
-    encryptionSalt: 'memory-enc',
+    role,
+    verifierSalt: salt('memory'),
+    verifierHash: verifier('memory'),
+    encryptionSalt: salt('memory-enc'),
     state: encryptedState('M'),
   })
   assert.equal((await nextMessage(socket)).type, 'state')
