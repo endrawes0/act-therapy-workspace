@@ -336,6 +336,7 @@ test('sync and follow spam are rate limited per connection', async () => {
     rateLimits: {
       sync: { limit: 1, windowMs: 60_000 },
       follow: { limit: 1, windowMs: 60_000 },
+      'follow-control': { limit: 1, windowMs: 60_000 },
     },
   })
   await new Promise((resolve) => created.server.listen(0, '127.0.0.1', resolve))
@@ -362,6 +363,12 @@ test('sync and follow spam are rate limited per connection', async () => {
     })
     const followLimit = await nextMessageOfType(socket, 'error')
     assert.equal(followLimit.code, 'rate-limited')
+
+    send(socket, { type: 'follow-control', enabled: true, participantId: 'first', role })
+    await nextMessageOfType(socket, 'follow-state')
+    send(socket, { type: 'follow-control', enabled: false, participantId: 'first', role })
+    const followControlLimit = await nextMessageOfType(socket, 'error')
+    assert.equal(followControlLimit.code, 'rate-limited')
   } finally {
     socket.close()
     await new Promise((resolve) => created.server.close(resolve))

@@ -122,6 +122,7 @@ export const createCollaborationServer = ({
     'room-info': { limit: 20, windowMs: 60_000 },
     sync: { limit: 30, windowMs: 10_000 },
     follow: { limit: 60, windowMs: 10_000 },
+    'follow-control': { limit: 20, windowMs: 10_000 },
   },
 } = {}) => {
   const app = express()
