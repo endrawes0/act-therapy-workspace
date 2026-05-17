@@ -42,11 +42,11 @@ npm install
 npm run dev
 ```
 
-The Vite dev server only serves the frontend. For end-to-end collaboration,
-build and run the Node server:
+The Vite dev server serves the frontend and proxies `/collaboration` WebSockets
+to the Node server on port `4173`. For end-to-end collaboration, run the app
+server in another terminal:
 
 ```bash
-npm run build
 npm start
 ```
 
@@ -76,10 +76,27 @@ PORT=4173 npm start
 
 For telehealth or in-office use with protected health information, deploy only
 on infrastructure covered by the required privacy, security, consent, and BAA
-requirements. The current server persists room state as JSON files under
-`data/sessions`, which is useful for restoration but should be replaced or
-hardened with encrypted storage, access controls, retention policies, and audit
-logging before clinical production use.
+requirements.
+
+### Session Storage Controls
+
+Room content is encrypted in the browser before it is sent over the WebSocket.
+The server persists only encrypted state blobs and non-sensitive room metadata:
+room id, verifier salt/hash, encryption salt, schema version, and update time.
+The server does not receive the room passphrase or the derived
+content-encryption key, and it rejects plaintext sync payloads.
+
+Local file-backed storage under `data/sessions` is demo/development storage. It
+is disabled automatically when `NODE_ENV=production` unless
+`ACT_ENABLE_DEMO_FILE_STORAGE=true` is set. Do not use this demo file store as a
+HIPAA production storage control. Production deployments that handle PHI still
+need BAA-covered infrastructure for storage, backups, logs, replicas, transport,
+monitoring, and operational access.
+
+Retention is controlled with `ACT_SESSION_RETENTION_DAYS` and defaults to 30
+days. Expired rooms are removed on startup/load. Users can also delete an
+unlocked room from the save panel; deletion removes the encrypted room blob and
+associated room metadata from the configured storage.
 
 ## Client Take-Away
 
